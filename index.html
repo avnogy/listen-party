@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Listen Party</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <h1>Listen Party</h1>
+      <p>Office stream</p>
+    </header>
+
+    <section class="controls">
+      <button id="rescan">Rescan</button>
+      <span id="rescanStatus" class="status" role="status" aria-live="polite"></span>
+    </section>
+
+    <section class="search">
+      <div class="section-head">
+        <h2>Library</h2>
+        <span id="libraryStatus" class="status"></span>
+      </div>
+      <form id="searchForm">
+        <input id="q" name="q" type="search" placeholder="Search MP3 library" autocomplete="off">
+        <button>Search</button>
+      </form>
+      <p id="searchStatus" class="hint"></p>
+      <div id="results"></div>
+    </section>
+
+    <section class="queue-panel">
+      <div class="section-head">
+        <h2>Queue</h2>
+        <button id="clearQueue" class="secondary compact">Clear</button>
+      </div>
+      <ol id="queue"></ol>
+    </section>
+  </main>
+
+  <section class="player-bar">
+    <div class="track-copy">
+      <p id="track">Nothing playing</p>
+      <p id="artist"></p>
+    </div>
+    <div class="player-controls">
+      <audio id="audio" controls autoplay></audio>
+      <button id="skip" class="icon-button" title="Skip" aria-label="Skip track">
+        <span class="skip-icon" aria-hidden="true"></span>
+      </button>
+    </div>
+  </section>
+  <script src="/app.js"></script>
+</body>
+</html>

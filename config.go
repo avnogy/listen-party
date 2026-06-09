@@ -1,0 +1,184 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type AuthConfig struct {
+	Listener Credentials `json:"listener"`
+	Admin    Credentials `json:"admin"`
+	Rescan   Credentials `json:"rescan"`
+}
+
+type Config struct {
+	Addr         string     `json:"addr"`
+	MusicDirs    []string   `json:"music_dirs"`
+	DatabasePath string     `json:"database_path"`
+	Auth         AuthConfig `json:"auth"`
+}
+
+func DefaultConfigDir() (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "listen-party"), nil
+}
+
+func DefaultConfigPath() (string, error) {
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
+}
+
+func DefaultDatabasePath() (string, error) {
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "listen-party.sqlite"), nil
+}
+
+func DefaultMusicDir() (string, error) {
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "music"), nil
+}
+
+func LoadConfig(path string) (Config, error) {
+	if path == "" {
+		var err error
+		path, err = DefaultConfigPath()
+		if err != nil {
+			return Config{}, err
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return createDefaultConfig(path)
+		}
+		return Config{}, err
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if cfg.Addr == "" {
+		cfg.Addr = "0.0.0.0:8080"
+	}
+	if cfg.DatabasePath == "" {
+		dbPath, err := DefaultDatabasePath()
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.DatabasePath = dbPath
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.EnsureMusicDirs(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func createDefaultConfig(path string) (Config, error) {
+	cfg, err := NewDefaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.EnsureMusicDirs(); err != nil {
+		return Config{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return Config{}, err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return Config{}, err
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func NewDefaultConfig() (Config, error) {
+	dbPath, err := DefaultDatabasePath()
+	if err != nil {
+		return Config{}, err
+	}
+	musicDir, err := DefaultMusicDir()
+	if err != nil {
+		return Config{}, err
+	}
+	defaultCreds := Credentials{Username: "default", Password: "default"}
+	adminCreds := Credentials{Username: "admin", Password: "admin"}
+	return Config{
+		Addr:         "0.0.0.0:8080",
+		MusicDirs:    []string{musicDir},
+		DatabasePath: dbPath,
+		Auth: AuthConfig{
+			Listener: defaultCreds,
+			Admin:    adminCreds,
+			Rescan:   defaultCreds,
+		},
+	}, nil
+}
+
+func (c Config) Validate() error {
+	if len(c.MusicDirs) == 0 {
+		return errors.New("music_dirs must contain at least one directory")
+	}
+	for _, dir := range c.MusicDirs {
+		if dir == "" {
+			return errors.New("music_dirs must not contain empty paths")
+		}
+	}
+	if err := validateCreds("auth.listener", c.Auth.Listener); err != nil {
+		return err
+	}
+	if err := validateCreds("auth.admin", c.Auth.Admin); err != nil {
+		return err
+	}
+	if err := validateCreds("auth.rescan", c.Auth.Rescan); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) EnsureMusicDirs() error {
+	for _, dir := range c.MusicDirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create music dir %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+func validateCreds(name string, creds Credentials) error {
+	if creds.Username == "" || creds.Password == "" {
+		return fmt.Errorf("%s username and password are required", name)
+	}
+	return nil
+}
