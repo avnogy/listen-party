@@ -9,7 +9,7 @@ The project is intentionally plain:
 - One Go binary.
 - Embedded HTML/CSS/JS.
 - SQLite metadata/search index.
-- Basic Auth.
+- PocketBase-backed local auth.
 - No runtime internet services.
 
 ## Current State
@@ -24,6 +24,8 @@ Working:
 - Automatic first-run config creation.
 - SQLite-backed metadata and search.
 - Embedded listener UI and admin config UI.
+- Embedded PocketBase auth/admin dashboard mounted at `/authAdmin`.
+- Dedicated listener/admin app login mounted at `/login`.
 - Shared current track, queue, queue order, play/pause, seek, skip, previous,
   and track-end advance.
 - Queue add, remove, clear, move up/down, and move-to-next.
@@ -103,8 +105,17 @@ Default config:
   "database_path": "${UserConfigDir}/listen-party/listen-party.sqlite",
   "scan_workers": 16,
   "auth": {
-    "listener": {"username": "default", "password": "default"},
-    "admin": {"username": "admin", "password": "admin"}
+    "pocketbase": {
+      "data_dir": "${UserConfigDir}/listen-party/auth",
+      "bootstrap_admin_email": "admin@listen-party.local",
+      "keycloak": {
+        "enabled": false,
+        "issuer_url": "",
+        "client_id": "",
+        "client_secret": "",
+        "display_name": "Keycloak"
+      }
+    }
   }
 }
 ```
@@ -124,9 +135,52 @@ The admin page can edit the config:
 http://localhost:8080/admin
 ```
 
-Changing `addr` or `database_path` requires a restart. Updating auth
-credentials, music directories, or scan worker count applies immediately; use
-the admin rescan button to refresh the library after changing music folders.
+The auth/admin dashboard is available at:
+
+```text
+http://localhost:8080/authAdmin
+```
+
+Regular music app users should not use `/authAdmin`. Unauthenticated requests to
+the listener UI redirect to:
+
+```text
+http://localhost:8080/login
+```
+
+On first run the server bootstraps a PocketBase superuser for auth
+administration:
+
+```text
+admin@listen-party.local / admin
+```
+
+The bootstrap superuser is only for `/authAdmin`; it is not accepted for app
+routes. Regular app users are created in `/authAdmin` with a username,
+password, `enabled=true`, and optional `app_role=admin`, then sign in through
+`/login`.
+
+To enable a local Keycloak bridge, create a Keycloak realm and confidential
+client, then set:
+
+```json
+"keycloak": {
+  "enabled": true,
+  "issuer_url": "http://127.0.0.1:10000/realms/listen-party",
+  "client_id": "listen-party",
+  "client_secret": "copy-from-keycloak-client-credentials",
+  "display_name": "Keycloak"
+}
+```
+
+In Keycloak, create users with a username; that username becomes the
+listen-party username on first Keycloak login. Set a password under the user's
+Credentials tab and turn off "Temporary" if you do not want Keycloak to force a
+password change on first login.
+
+Changing `addr`, `database_path`, or auth provider settings requires a restart.
+Updating music directories or scan worker count applies immediately; use the
+admin rescan button to refresh the library after changing music folders.
 `scan_workers` must be between 1 and 256.
 
 ## Build And Run
@@ -161,17 +215,9 @@ Open:
 http://localhost:8080
 ```
 
-Default listener login:
-
-```text
-default / default
-```
-
-Default admin login:
-
-```text
-admin / admin
-```
+Default auth admin login is `admin@listen-party.local / admin`; use it only at
+`/authAdmin`, then change the password. Create separate username/password app
+users in the `users` collection for the music UI.
 
 ## Deployment
 
@@ -181,8 +227,9 @@ For a simple LAN deployment:
 2. Create a config file with the listen address, music folders, database path,
    and credentials.
 3. Run the binary with `-config /path/to/config.json`.
-4. Put MP3 files under one of the configured `music_dirs`.
-5. Open the listener UI from LAN clients.
+4. Create app users in `/authAdmin`.
+5. Put MP3 files under one of the configured `music_dirs`.
+6. Open the listener UI from LAN clients.
 
 The binary serves its own static UI and media endpoints. No separate web server
 is required for basic LAN use. If putting it behind a reverse proxy, preserve
@@ -212,6 +259,7 @@ The main files are:
 
 - `main.go`: startup, config loading, scan, HTTP server.
 - `config.go`: config defaults, validation, and persistence.
+- `internal/auth/auth.go`: PocketBase auth setup, bootstrap, and token checks.
 - `internal/library/library.go`: SQLite index ownership, scan support, search.
 - `playback.go`: shared playback state machine.
 - `server.go`: HTTP API, SSE, media serving, view shaping.

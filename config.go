@@ -6,16 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	appauth "listen-party/internal/auth"
 )
 
-type Credentials struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
 type AuthConfig struct {
-	Listener Credentials `json:"listener"`
-	Admin    Credentials `json:"admin"`
+	PocketBase appauth.Config `json:"pocketbase"`
 }
 
 type Config struct {
@@ -152,6 +148,10 @@ func createDefaultConfig(path string) (Config, error) {
 }
 
 func NewDefaultConfig() (Config, error) {
+	configDir, err := DefaultConfigDir()
+	if err != nil {
+		return Config{}, err
+	}
 	dbPath, err := DefaultDatabasePath()
 	if err != nil {
 		return Config{}, err
@@ -160,16 +160,13 @@ func NewDefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	defaultCreds := Credentials{Username: "default", Password: "default"}
-	adminCreds := Credentials{Username: "admin", Password: "admin"}
 	return Config{
 		Addr:         "0.0.0.0:8080",
 		MusicDirs:    []string{musicDir},
 		DatabasePath: dbPath,
 		ScanWorkers:  defaultScanWorkers,
 		Auth: AuthConfig{
-			Listener: defaultCreds,
-			Admin:    adminCreds,
+			PocketBase: appauth.DefaultConfig(configDir),
 		},
 	}, nil
 }
@@ -189,11 +186,8 @@ func (c Config) Validate() error {
 			return errors.New("music_dirs must not contain empty paths")
 		}
 	}
-	if err := validateCreds("auth.listener", c.Auth.Listener); err != nil {
-		return err
-	}
-	if err := validateCreds("auth.admin", c.Auth.Admin); err != nil {
-		return err
+	if c.Auth.PocketBase.DataDir == "" {
+		return errors.New("auth.pocketbase.data_dir is required")
 	}
 	return nil
 }
@@ -212,6 +206,13 @@ func (c *Config) ApplyDefaults() error {
 	if c.ScanWorkers == 0 {
 		c.ScanWorkers = defaultScanWorkers
 	}
+	if c.Auth.PocketBase.DataDir == "" {
+		configDir, err := DefaultConfigDir()
+		if err != nil {
+			return err
+		}
+		c.Auth.PocketBase = appauth.DefaultConfig(configDir)
+	}
 	return nil
 }
 
@@ -220,13 +221,6 @@ func (c Config) EnsureMusicDirs() error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create music dir %s: %w", dir, err)
 		}
-	}
-	return nil
-}
-
-func validateCreds(name string, creds Credentials) error {
-	if creds.Username == "" || creds.Password == "" {
-		return fmt.Errorf("%s username and password are required", name)
 	}
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	appauth "listen-party/internal/auth"
 )
 
 func TestValidateRequiresUsefulConfig(t *testing.T) {
@@ -12,17 +14,16 @@ func TestValidateRequiresUsefulConfig(t *testing.T) {
 		MusicDirs:   []string{"/music"},
 		ScanWorkers: defaultScanWorkers,
 		Auth: AuthConfig{
-			Listener: Credentials{Username: "listener", Password: "listen"},
-			Admin:    Credentials{Username: "admin", Password: "admin"},
+			PocketBase: appauthConfig("/auth"),
 		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
-	cfg.Auth.Admin.Password = ""
+	cfg.Auth.PocketBase.DataDir = ""
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("missing admin password accepted")
+		t.Fatal("missing auth data dir accepted")
 	}
 }
 
@@ -31,8 +32,7 @@ func TestValidateScanWorkers(t *testing.T) {
 		MusicDirs:   []string{"/music"},
 		ScanWorkers: defaultScanWorkers,
 		Auth: AuthConfig{
-			Listener: Credentials{Username: "listener", Password: "listen"},
-			Admin:    Credentials{Username: "admin", Password: "admin"},
+			PocketBase: appauthConfig("/auth"),
 		},
 	}
 	cfg.ScanWorkers = 0
@@ -62,11 +62,9 @@ func TestLoadConfigCreatesDefaultConfigAndMusicDir(t *testing.T) {
 	if len(cfg.MusicDirs) != 1 || cfg.MusicDirs[0] != wantMusic {
 		t.Fatalf("MusicDirs = %#v, want [%q]", cfg.MusicDirs, wantMusic)
 	}
-	if cfg.Auth.Listener != (Credentials{Username: "default", Password: "default"}) {
-		t.Fatalf("Listener creds = %#v, want default/default", cfg.Auth.Listener)
-	}
-	if cfg.Auth.Admin != (Credentials{Username: "admin", Password: "admin"}) {
-		t.Fatalf("Admin creds = %#v, want admin/admin", cfg.Auth.Admin)
+	wantAuthDir := filepath.Join(configHome, "listen-party", "auth")
+	if cfg.Auth.PocketBase.DataDir != wantAuthDir {
+		t.Fatalf("auth data dir = %q, want %q", cfg.Auth.PocketBase.DataDir, wantAuthDir)
 	}
 	if cfg.ScanWorkers != defaultScanWorkers {
 		t.Fatalf("ScanWorkers = %d, want %d", cfg.ScanWorkers, defaultScanWorkers)
@@ -95,10 +93,7 @@ func TestLoadConfigCreatesConfiguredMusicDirs(t *testing.T) {
 	data := []byte(`{
   "addr": "127.0.0.1:9999",
   "music_dirs": [` + strconvQuote(musicDir) + `],
-  "auth": {
-    "listener": {"username": "a", "password": "b"},
-    "admin": {"username": "c", "password": "d"}
-  }
+  "auth": {"pocketbase": {"data_dir": ` + strconvQuote(filepath.Join(dir, "auth")) + `}}
 }`)
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -121,8 +116,7 @@ func TestSaveConfigWritesConfigAndCreatesMusicDirs(t *testing.T) {
 		DatabasePath: filepath.Join(dir, "db.sqlite"),
 		ScanWorkers:  4,
 		Auth: AuthConfig{
-			Listener: Credentials{Username: "listener", Password: "listen"},
-			Admin:    Credentials{Username: "admin", Password: "admin"},
+			PocketBase: appauthConfig(filepath.Join(dir, "auth")),
 		},
 	}
 
@@ -144,4 +138,8 @@ func TestSaveConfigWritesConfigAndCreatesMusicDirs(t *testing.T) {
 func strconvQuote(s string) string {
 	data, _ := json.Marshal(s)
 	return string(data)
+}
+
+func appauthConfig(dataDir string) appauth.Config {
+	return appauth.Config{DataDir: dataDir, BootstrapAdminEmail: "admin@listen-party.local"}
 }

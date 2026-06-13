@@ -36,6 +36,11 @@ main {
   padding: 34px 18px 28px;
 }
 
+.admin-page main {
+  width: min(900px, 100%);
+  padding-top: 34px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: minmax(360px, 30vw) minmax(0, 1fr);
@@ -54,6 +59,29 @@ main {
   padding: 22px 14px;
   border-right: 1px solid var(--line);
   background: #151619;
+}
+
+.user-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+.user-strip form {
+  display: block;
+}
+
+.username {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-strong);
+  font-size: 0.92rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playback-area {
@@ -87,10 +115,76 @@ h1, h2, p {
 
 .controls {
   display: flex;
+  align-items: center;
   justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.presence-menu {
+  position: relative;
+  min-width: 0;
+}
+
+#presenceButton {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#presenceButton::after {
+  margin-left: 8px;
+  color: var(--muted);
+  content: "▾";
+}
+
+#presenceButton[aria-expanded="true"]::after {
+  content: "▴";
+}
+
+.listener-popover {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(260px, calc(100vw - 28px));
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+}
+
+.listener-item {
+  overflow: hidden;
+  padding: 7px 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listener-item.empty {
+  color: var(--muted);
+}
+
+.admin-controls {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px 18px;
+  width: 100%;
+  margin: 18px auto 14px;
+}
+
+.scan-status-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
 }
 
 button {
@@ -121,9 +215,9 @@ button.secondary {
 }
 
 button.compact {
-  min-height: 32px;
+  min-height: 30px;
   padding: 5px 12px;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
 }
 
 .status {
@@ -131,6 +225,15 @@ button.compact {
   align-self: center;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.admin-controls .status {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-controls .status:empty {
+  display: none;
 }
 
 .status[data-kind="ok"] {
@@ -160,6 +263,10 @@ button.compact {
   max-width: 860px;
   margin-right: auto;
   margin-left: auto;
+}
+
+.admin-page .config-panel {
+  max-width: none;
 }
 
 .library-rail .search {
@@ -309,19 +416,34 @@ input:focus, textarea:focus {
 
 .title {
   overflow: hidden;
+  color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 700;
 }
 
 .sub {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
+  line-height: 1.25;
+}
+
+.requester {
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .item .sub {
   display: none;
+}
+
+#history .item .meta {
+  display: block;
+}
+
+#history .item .sub {
+  display: block;
 }
 
 .section-head {
@@ -330,6 +452,15 @@ input:focus, textarea:focus {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.admin-page .section-head {
+  align-items: flex-start;
+}
+
+.admin-page #configStatus {
+  max-width: min(520px, 60%);
+  text-align: right;
 }
 
 .playback-lists {
@@ -368,11 +499,16 @@ input:focus, textarea:focus {
 
 .queue-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--line);
+}
+
+.queue-item .meta {
+  min-width: 0;
+  padding-top: 2px;
 }
 
 #history .item:first-child {
@@ -625,6 +761,24 @@ input[type="range"]:disabled {
 
   .config-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-controls button {
+    justify-self: start;
+  }
+
+  .admin-page .section-head {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-page #configStatus {
+    max-width: none;
+    text-align: left;
   }
 
   .player-bar {

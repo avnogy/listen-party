@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	appauth "listen-party/internal/auth"
 	musiclib "listen-party/internal/library"
 )
 
@@ -49,8 +50,16 @@ func main() {
 	}
 	defer lib.Close()
 
+	authSvc, err := appauth.Open(cfg.Auth.PocketBase)
+	if err != nil {
+		slog.Error("open auth service", "error", err)
+		os.Exit(1)
+	}
+	defer authSvc.Close()
+
 	app := NewServer(ServerOptions{
-		Auth:       NewBasicAuth(cfg.Auth),
+		Auth:       authSvc,
+		AuthRoutes: authSvc.Handler(),
 		Library:    lib,
 		Player:     NewPlayback("default"),
 		Config:     cfg,

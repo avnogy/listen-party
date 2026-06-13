@@ -5,6 +5,8 @@ const queueEl = document.getElementById("queue");
 const historyEl = document.getElementById("history");
 const resultsEl = document.getElementById("results");
 const presenceEl = document.getElementById("presence");
+const presenceButton = document.getElementById("presenceButton");
+const listenerListEl = document.getElementById("listenerList");
 const clearQueueButton = document.getElementById("clearQueue");
 const clearHistoryButton = document.getElementById("clearHistory");
 const previousButton = document.getElementById("previous");
@@ -16,6 +18,7 @@ const muteButton = document.getElementById("mute");
 const volumeInput = document.getElementById("volume");
 const searchInput = document.getElementById("q");
 const libraryStatus = document.getElementById("libraryStatus");
+const currentUserEl = document.getElementById("currentUser");
 const volumeStorageKey = "listen-party-volume";
 const mutedStorageKey = "listen-party-muted";
 const syncToleranceSeconds = 0.1;
@@ -177,7 +180,7 @@ function renderState(state) {
     artistEl.textContent = "";
   } else {
     trackEl.textContent = current.title;
-    artistEl.textContent = label(current);
+    renderSubtitle(artistEl, label(current), state.current_requested_by);
     if (currentPlaybackID !== state.playback_id) {
       currentID = current.id;
       currentPlaybackID = state.playback_id;
@@ -191,10 +194,28 @@ function renderState(state) {
   renderHistory(state.history || []);
   clearQueueButton.hidden = state.queue.length === 0;
   clearHistoryButton.hidden = !state.history || state.history.length === 0;
-  presenceEl.textContent = `${state.listener_count} listener${state.listener_count === 1 ? "" : "s"} connected`;
+  renderPresence(state);
   previousButton.disabled = !state.history || state.history.length === 0;
   togglePlaybackButton.disabled = !current && state.queue.length === 0;
   renderPlaybackButton(Boolean(current && !state.paused));
+}
+
+function renderPresence(state) {
+  const listeners = Array.isArray(state.listeners) ? state.listeners : [];
+  const count = Number.isFinite(state.listener_count) ? state.listener_count : listeners.length;
+  presenceEl.textContent = `${count} listener${count === 1 ? "" : "s"}`;
+  listenerListEl.replaceChildren(...listeners.map((username) => {
+    const item = document.createElement("div");
+    item.className = "listener-item";
+    item.textContent = username;
+    return item;
+  }));
+  if (listeners.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "listener-item empty";
+    empty.textContent = "No active users";
+    listenerListEl.append(empty);
+  }
 }
 
 function renderQueueItem(item) {
@@ -202,7 +223,11 @@ function renderQueueItem(item) {
   li.className = "queue-item";
 
   const track = item.track;
-  const meta = trackMeta(track ? track.title : `Track ${item.track_id}`, track ? trackSubtitle(track) : "");
+  const meta = trackMeta(
+    track ? track.title : `Track ${item.track_id}`,
+    track ? trackSubtitle(track) : "",
+    item.requested_by
+  );
 
   const actions = document.createElement("div");
   actions.className = "row-actions";
@@ -222,7 +247,7 @@ function renderHistoryItem(item) {
   return trackRow(track || {id: item.track_id, title: `Track ${item.track_id}`}, [
     ["Queue", async () => addTrack(item.track_id)],
     ["Play", async () => playNow(item.track_id)],
-  ]);
+  ], item.requested_by);
 }
 
 function renderHistory(history) {
@@ -250,7 +275,7 @@ function stateButton(text, path, body = null) {
   });
 }
 
-function trackMeta(titleText, subtitleText) {
+function trackMeta(titleText, subtitleText, requestedBy = "") {
   const meta = document.createElement("div");
   meta.className = "meta";
 
@@ -260,17 +285,17 @@ function trackMeta(titleText, subtitleText) {
 
   const sub = document.createElement("div");
   sub.className = "sub";
-  sub.textContent = subtitleText;
+  renderSubtitle(sub, subtitleText, requestedBy);
 
   meta.append(title, sub);
   return meta;
 }
 
-function trackRow(track, actions) {
+function trackRow(track, actions, requestedBy = "") {
   const row = document.createElement("div");
   row.className = "item";
 
-  const meta = trackMeta(track.title, trackSubtitle(track));
+  const meta = trackMeta(track.title, trackSubtitle(track), requestedBy);
 
   const actionEl = document.createElement("div");
   actionEl.className = "row-actions";
@@ -278,6 +303,25 @@ function trackRow(track, actions) {
 
   row.append(meta, actionEl);
   return row;
+}
+
+function renderSubtitle(element, subtitleText, requestedBy = "") {
+  element.replaceChildren();
+  if (subtitleText) {
+    element.append(document.createTextNode(subtitleText));
+  }
+  if (!requestedBy) {
+    return;
+  }
+  if (subtitleText) {
+    element.append(document.createTextNode(" - Queued by "));
+  } else {
+    element.append(document.createTextNode("Queued by "));
+  }
+  const requester = document.createElement("span");
+  requester.className = "requester";
+  requester.textContent = requestedBy;
+  element.append(requester);
 }
 
 async function addTrack(trackID) {
@@ -382,6 +426,16 @@ async function loadLibraryStatus() {
   }
 }
 
+async function loadCurrentUser() {
+  try {
+    const user = await api("/api/me");
+    currentUserEl.textContent = user.username || "Signed in";
+  } catch (err) {
+    currentUserEl.textContent = "Signed in";
+    console.error(err);
+  }
+}
+
 async function runSearch() {
   const q = searchInput.value.trim();
   const tracks = await api(`/api/search?q=${encodeURIComponent(q)}`);
@@ -467,6 +521,28 @@ muteButton.addEventListener("click", () => {
   saveLocalVolume();
 });
 
+presenceButton.addEventListener("click", () => {
+  const nextOpen = listenerListEl.hidden;
+  listenerListEl.hidden = !nextOpen;
+  presenceButton.setAttribute("aria-expanded", String(nextOpen));
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".presence-menu")) {
+    return;
+  }
+  listenerListEl.hidden = true;
+  presenceButton.setAttribute("aria-expanded", "false");
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") {
+    return;
+  }
+  listenerListEl.hidden = true;
+  presenceButton.setAttribute("aria-expanded", "false");
+});
+
 renderPlaybackButton(false);
 loadLocalVolume();
 
@@ -483,5 +559,6 @@ new EventSource("/events").addEventListener("state", (event) => {
 });
 
 loadLibraryStatus();
+loadCurrentUser();
 runSearch().catch(console.error);
 api("/api/state").then(renderState).catch(console.error);

@@ -4,18 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Listen Party</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
   <main class="app-shell">
     <aside class="library-rail">
-      <header class="brand">
-        <h1>Listen Party</h1>
-        <p>Office stream</p>
-      </header>
+      <div class="user-strip">
+        <span id="currentUser" class="username"></span>
+        <form action="/logout" method="post">
+          <button class="secondary compact" type="submit">Logout</button>
+        </form>
+      </div>
 
       <section class="controls">
-        <span id="presence" class="status"></span>
+        <div class="presence-menu">
+          <button id="presenceButton" class="secondary compact" type="button" aria-expanded="false" aria-controls="listenerList">
+            <span id="presence" class="status"></span>
+          </button>
+          <div id="listenerList" class="listener-popover" hidden></div>
+        </div>
       </section>
 
       <section class="search">
@@ -94,6 +101,6 @@
       </section>
     </section>
   </main>
-  <script src="/app.js"></script>
+  <script src="/assets/app.js"></script>
 </body>
 </html>
