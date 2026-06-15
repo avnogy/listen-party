@@ -46,9 +46,8 @@ Known limitations:
 
 - Browser autoplay policy still applies. A browser that has not been interacted
   with may refuse to make sound until the user clicks the page.
-- Playback sync is practical, not sample-accurate. Clients correct drift against
-  server time when they are more than 0.1 seconds away from the expected media
-  position.
+- Playback sync is practical, not sample-accurate. Clients sync immediately on
+  server state updates and keep a slower local drift guard against server time.
 
 ## Synchronization Model
 
@@ -62,12 +61,12 @@ The server is the source of truth for playback in each room:
 - Track start time.
 - Connected listener count.
 
-Clients subscribe to `/rooms/{room}/events` with SSE. Every state update carries
-a revision and server timestamp. The browser keeps its local `<audio>` element
-aligned to that state and periodically re-checks drift. Client media events are
-local except for `ended`, which asks the server to advance the shared playback
-state. The server also checks indexed track duration during room state reads and
-SSE heartbeats so playback advances even if a browser misses the `ended` event.
+Clients subscribe to `/rooms/{room}/events` with SSE. Every state update is the
+full room state and carries a server timestamp. The browser ignores state for
+other rooms, loads media from room plus track identity, and keeps its local
+`<audio>` element aligned to server time. Client media events are local; the
+server advances tracks from indexed duration checks and broadcasts the next
+state without depending on any browser reporting that playback ended.
 
 Removing a room from config closes existing SSE subscriptions for that room.
 

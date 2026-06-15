@@ -45,11 +45,10 @@ func TestSeekUpdatesSharedPosition(t *testing.T) {
 	if state.CurrentTrackID != 10 {
 		t.Fatalf("current = %d, want 10", state.CurrentTrackID)
 	}
-	if state.StartedAt.IsZero() {
-		t.Fatal("started_at should be set")
-	}
-
 	state = p.Pause()
+	if state.PositionAtPauseMS < 30_000 || state.PositionAtPauseMS > 31_000 {
+		t.Fatalf("pause position after seek = %d, want about 30000", state.PositionAtPauseMS)
+	}
 	state = p.Seek(12_000)
 	if state.PositionAtPauseMS != 12_000 {
 		t.Fatalf("pause position = %d, want 12000", state.PositionAtPauseMS)
@@ -132,27 +131,6 @@ func TestPreviousPlaysNewestHistoryAndReturnsCurrentToQueue(t *testing.T) {
 	}
 	if state.CurrentRequestedBy != "alice" || state.Queue[0].RequestedBy != "alice" {
 		t.Fatalf("requesters after previous: current=%q queue=%q, want alice/alice", state.CurrentRequestedBy, state.Queue[0].RequestedBy)
-	}
-}
-
-func TestPlaybackIDChangesForEachStartedTrack(t *testing.T) {
-	p := NewPlayback("default")
-	p.Add(10, "alice")
-	first, err := p.Play()
-	if err != nil {
-		t.Fatalf("play: %v", err)
-	}
-	p.Add(10, "alice")
-	second := p.Skip()
-
-	if first.PlaybackID == 0 {
-		t.Fatal("first playback id should be set")
-	}
-	if second.PlaybackID <= first.PlaybackID {
-		t.Fatalf("second playback id = %d, want greater than %d", second.PlaybackID, first.PlaybackID)
-	}
-	if second.CurrentTrackID != 10 {
-		t.Fatalf("current = %d, want same track id 10", second.CurrentTrackID)
 	}
 }
 

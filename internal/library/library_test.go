@@ -65,6 +65,48 @@ func TestClampTrackQueryLimit(t *testing.T) {
 	}
 }
 
+func TestFilenameFallbackFormatsCommonDownloads(t *testing.T) {
+	title, artist := filenameFallback("/music/Alex Clare - Too Close [zP5OEwh31E4].mp3")
+	if title != "Too Close" || artist != "Alex Clare" {
+		t.Fatalf("filename fallback = %q/%q, want Too Close/Alex Clare", title, artist)
+	}
+
+	title, artist = filenameFallback("/music/OCEAN.mp3")
+	if title != "OCEAN" || artist != "" {
+		t.Fatalf("filename fallback = %q/%q, want OCEAN/empty artist", title, artist)
+	}
+}
+
+func TestArtworkReadsEmbeddedPicture(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "with-art.mp3")
+	want := []byte{0xff, 0xd8, 0xff, 0xd9}
+	if err := os.WriteFile(path, id3v23PictureTag(want), 0o644); err != nil {
+		t.Fatalf("write mp3: %v", err)
+	}
+
+	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	if err := lib.flushTracks(ctx, []Track{{path: path, Title: "With Art", Size: 1, ModTime: time.Unix(1, 0)}}); err != nil {
+		t.Fatalf("flush tracks: %v", err)
+	}
+	tracks, err := lib.Search(ctx, "with art")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	got, mimeType, err := lib.Artwork(ctx, tracks[0].ID)
+	if err != nil {
+		t.Fatalf("artwork: %v", err)
+	}
+	if mimeType != "image/jpeg" || string(got) != string(want) {
+		t.Fatalf("artwork = %q %v, want image/jpeg %v", mimeType, got, want)
+	}
+}
+
 func TestSearchOrdersByTitleAscending(t *testing.T) {
 	ctx := context.Background()
 	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
@@ -235,6 +277,14 @@ func TestScanDeletesMissingTracksAfterSuccessfulWalk(t *testing.T) {
 	if rows != 1 {
 		t.Fatalf("stored rows after delete = %d, want 1", rows)
 	}
+}
+
+func id3v23PictureTag(image []byte) []byte {
+	body := append([]byte{0, 'i', 'm', 'a', 'g', 'e', '/', 'j', 'p', 'e', 'g', 0, 3, 0}, image...)
+	frame := []byte{'A', 'P', 'I', 'C', byte(len(body) >> 24), byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body)), 0, 0}
+	frame = append(frame, body...)
+	size := len(frame)
+	return append([]byte{'I', 'D', '3', 3, 0, 0, byte(size >> 21), byte(size >> 14), byte(size >> 7), byte(size)}, frame...)
 }
 
 func TestScanSkipsIgnoredDirectories(t *testing.T) {

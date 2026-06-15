@@ -470,7 +470,8 @@ input:focus, textarea:focus, select:focus {
 
 .item .meta {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
   min-height: 100%;
 }
 
@@ -489,21 +490,13 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.25;
 }
 
+.track-context {
+  color: var(--accent);
+}
+
 .requester {
   color: var(--accent-strong);
   font-weight: 700;
-}
-
-.item .sub {
-  display: none;
-}
-
-#history .item .meta {
-  display: block;
-}
-
-#history .item .sub {
-  display: block;
 }
 
 .section-head {
@@ -658,8 +651,19 @@ audio {
 
 .transport-controls {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.player-artwork {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--panel-2);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.2);
 }
 
 .seek-control, .volume-control {

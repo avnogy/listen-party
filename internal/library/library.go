@@ -225,6 +225,7 @@ func (l *Library) flushTracks(ctx context.Context, tracks []Track) error {
 	defer stmt.Close()
 
 	for _, t := range tracks {
+		normalizeTrackDisplay(&t)
 		if t.Title == "" {
 			t.Title = fallbackTitle(t.path)
 		}
@@ -396,7 +397,16 @@ WHERE id = ? AND available = 1`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Track{}, ErrTrackNotFound
 	}
-	return track, err
+	if err != nil {
+		return Track{}, err
+	}
+	if track.DurationMS == 0 {
+		track.DurationMS = mp3DurationMS(track.path)
+		if track.DurationMS > 0 {
+			_, _ = l.db.ExecContext(ctx, `UPDATE tracks SET duration_ms = ? WHERE id = ?`, track.DurationMS, id)
+		}
+	}
+	return track, nil
 }
 
 func (l *Library) ListByIDs(ctx context.Context, ids []int64) (map[int64]Track, error) {
@@ -426,6 +436,32 @@ func (l *Library) OpenMedia(ctx context.Context, id int64) (*Media, error) {
 	return &Media{Track: track, file: file}, nil
 }
 
+func (l *Library) Artwork(ctx context.Context, id int64) ([]byte, string, error) {
+	track, err := l.Get(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	file, err := os.Open(track.path)
+	if err != nil {
+		return nil, "", err
+	}
+	defer file.Close()
+
+	meta, err := tag.ReadFrom(file)
+	if err != nil {
+		return nil, "", ErrTrackNotFound
+	}
+	picture := meta.Picture()
+	if picture == nil || len(picture.Data) == 0 {
+		return nil, "", ErrTrackNotFound
+	}
+	mimeType := picture.MIMEType
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	return picture.Data, mimeType, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -439,6 +475,7 @@ func scanTrack(row rowScanner) (Track, error) {
 	}
 	t.ModTime = time.Unix(unix, 0)
 	t.Available = available == 1
+	normalizeTrackDisplay(&t)
 	return t, nil
 }
 
@@ -727,11 +764,14 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 		return Track{}, errors.New("path is a directory")
 	}
 
+	title, artist := filenameFallback(path)
 	t := Track{
-		path:    path,
-		Title:   fallbackTitle(path),
-		Size:    info.Size(),
-		ModTime: info.ModTime(),
+		path:       path,
+		Title:      title,
+		Artist:     artist,
+		DurationMS: mp3DurationMS(path),
+		Size:       info.Size(),
+		ModTime:    info.ModTime(),
 	}
 
 	f, err := os.Open(path)
@@ -745,10 +785,13 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 		if meta.Title() != "" {
 			t.Title = meta.Title()
 		}
-		t.Artist = meta.Artist()
+		if meta.Artist() != "" {
+			t.Artist = meta.Artist()
+		}
 		t.Album = meta.Album()
 		t.TrackNo, _ = meta.Track()
 	}
+	normalizeTrackDisplay(&t)
 	return t, nil
 }
 
@@ -774,6 +817,64 @@ func searchText(t Track) string {
 }
 
 func fallbackTitle(path string) string {
+	title, _ := filenameFallback(path)
+	return title
+}
+
+func filenameFallback(path string) (title, artist string) {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	name = strings.TrimSpace(strings.ReplaceAll(name, "_", " "))
+	name = trimTrailingBracketToken(name)
+	if before, after, ok := strings.Cut(name, " - "); ok && strings.TrimSpace(after) != "" {
+		artist = cleanFilenameText(before)
+		title = cleanFilenameText(after)
+	} else {
+		title = cleanFilenameText(name)
+	}
+	if title == "" {
+		title = fmt.Sprintf("track %s", base)
+	}
+	return title, artist
+}
+
+func trimTrailingBracketToken(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasSuffix(s, "]") {
+		return s
+	}
+	open := strings.LastIndex(s, "[")
+	if open <= 0 {
+		return s
+	}
+	token := s[open+1 : len(s)-1]
+	if len(token) < 6 || strings.ContainsAny(token, " \t") {
+		return s
+	}
+	return strings.TrimSpace(s[:open])
+}
+
+func cleanFilenameText(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+func normalizeTrackDisplay(t *Track) {
+	if t == nil || t.path == "" {
+		return
+	}
+	title, artist := filenameFallback(t.path)
+	oldTitle := fallbackTitleOld(t.path)
+	if t.Title == "" || (t.Artist == "" && t.Title == oldTitle) {
+		t.Title = title
+		if t.Artist == "" {
+			t.Artist = artist
+		}
+		return
+	}
+}
+
+func fallbackTitleOld(path string) string {
 	base := filepath.Base(path)
 	ext := filepath.Ext(base)
 	title := strings.TrimSuffix(base, ext)

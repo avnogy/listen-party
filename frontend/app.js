@@ -11,6 +11,7 @@ const clearQueueButton = document.getElementById("clearQueue");
 const clearHistoryButton = document.getElementById("clearHistory");
 const previousButton = document.getElementById("previous");
 const togglePlaybackButton = document.getElementById("togglePlayback");
+const artworkEl = document.getElementById("artwork");
 const seekInput = document.getElementById("seek");
 const elapsedEl = document.getElementById("elapsed");
 const durationEl = document.getElementById("duration");
@@ -23,11 +24,11 @@ const roomSelect = document.getElementById("roomSelect");
 const logoutForm = document.getElementById("logoutForm");
 const volumeStorageKey = "listen-party-volume";
 const mutedStorageKey = "listen-party-muted";
-const syncToleranceSeconds = 0.1;
+const syncToleranceSeconds = 0.05;
+const syncGuardMS = 50;
 const searchDebounceMS = 300;
 
 let currentID = 0;
-let currentPlaybackID = 0;
 let lastState = null;
 let lastStateReceivedAt = 0;
 let searchTimer = 0;
@@ -39,7 +40,6 @@ let audioContext = null;
 let gainNode = null;
 let mediaSource = null;
 let events = null;
-let endedPostPlaybackID = 0;
 
 function currentRoomIDFromPath() {
   const match = location.pathname.match(/^\/rooms\/([^/]+)/);
@@ -60,15 +60,20 @@ function closeEvents() {
   events = null;
 }
 
-function label(track) {
+function trackTitle(track) {
   if (!track) return "";
-  return [track.artist, track.album].filter(Boolean).join(" - ");
+  return (track.title || `Track ${track.id || track.track_id || ""}`).trim();
+}
+
+function trackContext(track) {
+  if (!track) return "";
+  return [track.artist, track.album].filter(Boolean).join(" · ");
 }
 
 function trackSubtitle(track) {
-  const parts = [track.artist, track.album].filter(Boolean);
+  const parts = [trackContext(track)].filter(Boolean);
   if (track.track_no) parts.push(`Track ${track.track_no}`);
-  return parts.join(" - ");
+  return parts.join(" · ");
 }
 
 function formatTime(seconds) {
@@ -126,6 +131,22 @@ function renderVolumeButton() {
   muteButton.classList.toggle("muted", muted);
 }
 
+function clearArtwork() {
+  artworkEl.hidden = true;
+  artworkEl.removeAttribute("src");
+}
+
+function loadArtwork(trackID) {
+  artworkEl.hidden = true;
+  artworkEl.src = `/media/${trackID}/artwork`;
+}
+
+artworkEl.addEventListener("load", () => {
+  artworkEl.hidden = false;
+});
+
+artworkEl.addEventListener("error", clearArtwork);
+
 function loadLocalVolume() {
   const storedVolume = Number(sessionStorage.getItem(volumeStorageKey));
   if (Number.isFinite(storedVolume) && storedVolume >= 0 && storedVolume <= 1) {
@@ -175,46 +196,40 @@ function applyLocalVolume() {
   renderVolumeButton();
 }
 
-function staleState(state) {
-  if (lastState && state.revision < lastState.revision) {
-    return true;
-  }
-  if (
-    lastState &&
-    state.revision === lastState.revision &&
-    Date.parse(state.server_time) < Date.parse(lastState.server_time)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 function renderState(state) {
-  if (staleState(state)) {
+  if (state.room_id && currentRoomID && state.room_id !== currentRoomID) {
+    return;
+  }
+  if (lastState && Date.parse(state.server_time) < Date.parse(lastState.server_time)) {
     return;
   }
 
+  const previousState = lastState;
   lastState = state;
   lastStateReceivedAt = Date.now();
 
   const current = state.current;
   if (!current) {
     currentID = 0;
-    currentPlaybackID = 0;
     audio.pause();
     audio.removeAttribute("src");
+    audio.load();
+    clearArtwork();
     setSeekUI(0);
     trackEl.textContent = "Nothing playing";
     artistEl.textContent = "";
   } else {
-    trackEl.textContent = current.title;
-    renderSubtitle(artistEl, label(current), state.current_requested_by);
-    if (currentPlaybackID !== state.playback_id) {
+    trackEl.textContent = trackTitle(current);
+    renderSubtitle(artistEl, trackContext(current), state.current_requested_by);
+    if (
+      currentID !== current.id ||
+      previousState?.room_id !== state.room_id ||
+      previousState?.started_at !== state.started_at
+    ) {
       currentID = current.id;
-      currentPlaybackID = state.playback_id;
-      endedPostPlaybackID = 0;
       audio.src = `/media/${current.id}`;
       audio.load();
+      loadArtwork(current.id);
     }
     syncAudio(state);
   }
@@ -253,7 +268,7 @@ function renderQueueItem(item) {
 
   const track = item.track;
   const meta = trackMeta(
-    track ? track.title : `Track ${item.track_id}`,
+    track ? trackTitle(track) : `Track ${item.track_id}`,
     track ? trackSubtitle(track) : "",
     item.requested_by
   );
@@ -324,7 +339,7 @@ function trackRow(track, actions, requestedBy = "") {
   const row = document.createElement("div");
   row.className = "item";
 
-  const meta = trackMeta(track.title, trackSubtitle(track), requestedBy);
+  const meta = trackMeta(trackTitle(track), trackSubtitle(track), requestedBy);
 
   const actionEl = document.createElement("div");
   actionEl.className = "row-actions";
@@ -337,7 +352,10 @@ function trackRow(track, actions, requestedBy = "") {
 function renderSubtitle(element, subtitleText, requestedBy = "") {
   element.replaceChildren();
   if (subtitleText) {
-    element.append(document.createTextNode(subtitleText));
+    const context = document.createElement("span");
+    context.className = "track-context";
+    context.textContent = subtitleText;
+    element.append(context);
   }
   if (!requestedBy) {
     return;
@@ -386,9 +404,7 @@ function syncAudio(state) {
   }
   const target = playbackPosition(state);
   const duration = mediaDuration();
-  if (!state.paused && duration > 0 && target > duration + 1.5 && currentID && endedPostPlaybackID !== currentPlaybackID) {
-    endedPostPlaybackID = currentPlaybackID;
-    postState(roomAPI("/api/playback/ended"), {track_id: currentID}).catch(console.error);
+  if (!state.paused && duration > 0 && target > duration) {
     setSeekUI(duration);
     return;
   }
@@ -413,7 +429,7 @@ setInterval(() => {
   if (lastState && currentID) {
     syncAudio(lastState);
   }
-}, 500);
+}, syncGuardMS);
 
 audio.addEventListener("loadedmetadata", () => {
   if (lastState && currentID) {
@@ -427,13 +443,6 @@ audio.addEventListener("canplay", () => {
   if (lastState && currentID) {
     syncAudio(lastState);
   }
-});
-
-audio.addEventListener("ended", () => {
-  if (!currentID) {
-    return;
-  }
-  postState(roomAPI("/api/playback/ended"), {track_id: currentID}).catch(console.error);
 });
 
 audio.addEventListener("timeupdate", () => {
@@ -635,11 +644,6 @@ async function start() {
   events = new EventSource(`/rooms/${encodeURIComponent(currentRoomID)}/events`);
   events.addEventListener("state", (event) => {
     renderState(JSON.parse(event.data));
-  });
-  events.addEventListener("error", () => {
-    if (document.visibilityState === "hidden") {
-      closeEvents();
-    }
   });
   loadLibraryStatus();
   loadCurrentUser();

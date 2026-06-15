@@ -24,8 +24,6 @@ type PlayedItem struct {
 
 type PlaybackState struct {
 	RoomID             string       `json:"room_id"`
-	Revision           int64        `json:"revision"`
-	PlaybackID         int64        `json:"playback_id"`
 	CurrentTrackID     int64        `json:"current_track_id"`
 	CurrentRequestedBy string       `json:"current_requested_by"`
 	StartedAt          time.Time    `json:"started_at"`
@@ -47,8 +45,6 @@ type Playback struct {
 	mu                 sync.Mutex
 	roomID             string
 	nextID             int64
-	rev                int64
-	playID             int64
 	current            int64
 	currentRequestedBy string
 	started            time.Time
@@ -99,7 +95,6 @@ func (p *Playback) PlayNow(trackID int64, requestedBy string) PlaybackState {
 
 	p.removeQueuedTrackLocked(trackID)
 	p.recordCurrentLocked()
-	p.playID++
 	p.current = trackID
 	p.currentRequestedBy = requestedBy
 	p.started = time.Now()
@@ -163,7 +158,6 @@ func (p *Playback) Previous() PlaybackState {
 		p.nextID++
 		p.queue = append([]QueueItem{{ID: p.nextID, TrackID: p.current, AddedAt: time.Now(), RequestedBy: p.currentRequestedBy}}, p.queue...)
 	}
-	p.playID++
 	p.current = item.TrackID
 	p.currentRequestedBy = item.RequestedBy
 	p.started = time.Now()
@@ -270,7 +264,7 @@ func (p *Playback) Subscribe(listener ActiveListener) (<-chan PlaybackState, fun
 		p.notify = make(map[chan PlaybackState]ActiveListener)
 	}
 	p.notify[ch] = listener
-	p.bumpLocked()
+	ch <- p.stateLocked()
 	p.mu.Unlock()
 
 	return ch, func() {
@@ -279,7 +273,6 @@ func (p *Playback) Subscribe(listener ActiveListener) (<-chan PlaybackState, fun
 		if _, ok := p.notify[ch]; ok {
 			delete(p.notify, ch)
 			close(ch)
-			p.bumpLocked()
 		}
 	}
 }
@@ -292,7 +285,6 @@ func (p *Playback) CloseSubscribers() {
 		delete(p.notify, ch)
 		close(ch)
 	}
-	p.bumpLocked()
 }
 
 func (p *Playback) startNextLocked() bool {
@@ -309,7 +301,6 @@ func (p *Playback) startNextLocked() bool {
 	item := p.queue[0]
 	p.queue = p.queue[1:]
 	p.recordCurrentLocked()
-	p.playID++
 	p.current = item.TrackID
 	p.currentRequestedBy = item.RequestedBy
 	p.started = time.Now()
@@ -339,7 +330,6 @@ func (p *Playback) recordCurrentLocked() {
 }
 
 func (p *Playback) bumpLocked() {
-	p.rev++
 	state := p.stateLocked()
 	for ch := range p.notify {
 		select {
@@ -355,8 +345,6 @@ func (p *Playback) stateLocked() PlaybackState {
 	listeners := p.listenersLocked()
 	return PlaybackState{
 		RoomID:             p.roomID,
-		Revision:           p.rev,
-		PlaybackID:         p.playID,
 		CurrentTrackID:     p.current,
 		CurrentRequestedBy: p.currentRequestedBy,
 		StartedAt:          p.started,

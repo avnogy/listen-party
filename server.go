@@ -71,39 +71,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /rooms/{room}", requireListener(http.HandlerFunc(s.handleRoomPage)))
 	mux.Handle("GET /rooms/{room}/", requireListener(http.HandlerFunc(s.handleRoomPage)))
 	mux.Handle("GET /assets/", requireListener(http.StripPrefix("/assets/", webFiles)))
-	mux.Handle("GET /events", requireListener(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /rooms/{room}/events", requireListener(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /api/me", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/rooms", requireListener(http.HandlerFunc(s.handleRooms)))
-	mux.Handle("GET /api/state", requireListener(http.HandlerFunc(s.handleState)))
 	mux.Handle("GET /rooms/{room}/api/state", requireListener(http.HandlerFunc(s.handleState)))
 	mux.Handle("GET /api/search", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /api/library", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleLibrary)))
-	mux.Handle("POST /api/queue", requireListener(http.HandlerFunc(s.handleQueue)))
 	mux.Handle("POST /rooms/{room}/api/queue", requireListener(http.HandlerFunc(s.handleQueue)))
-	mux.Handle("POST /api/queue/move", requireListener(http.HandlerFunc(s.handleQueueMove)))
 	mux.Handle("POST /rooms/{room}/api/queue/move", requireListener(http.HandlerFunc(s.handleQueueMove)))
-	mux.Handle("POST /api/queue/next", requireListener(http.HandlerFunc(s.handleQueueNext)))
 	mux.Handle("POST /rooms/{room}/api/queue/next", requireListener(http.HandlerFunc(s.handleQueueNext)))
-	mux.Handle("POST /api/history/clear", requireListener(http.HandlerFunc(s.handleHistoryClear)))
 	mux.Handle("POST /rooms/{room}/api/history/clear", requireListener(http.HandlerFunc(s.handleHistoryClear)))
-	mux.Handle("POST /api/playback/play", requireListener(http.HandlerFunc(s.handlePlay)))
 	mux.Handle("POST /rooms/{room}/api/playback/play", requireListener(http.HandlerFunc(s.handlePlay)))
-	mux.Handle("POST /api/playback/play-now", requireListener(http.HandlerFunc(s.handlePlayNow)))
 	mux.Handle("POST /rooms/{room}/api/playback/play-now", requireListener(http.HandlerFunc(s.handlePlayNow)))
-	mux.Handle("POST /api/playback/pause", requireListener(http.HandlerFunc(s.handlePause)))
 	mux.Handle("POST /rooms/{room}/api/playback/pause", requireListener(http.HandlerFunc(s.handlePause)))
-	mux.Handle("POST /api/playback/seek", requireListener(http.HandlerFunc(s.handleSeek)))
 	mux.Handle("POST /rooms/{room}/api/playback/seek", requireListener(http.HandlerFunc(s.handleSeek)))
-	mux.Handle("POST /api/playback/ended", requireListener(http.HandlerFunc(s.handleEnded)))
-	mux.Handle("POST /rooms/{room}/api/playback/ended", requireListener(http.HandlerFunc(s.handleEnded)))
-	mux.Handle("POST /api/playback/previous", requireListener(http.HandlerFunc(s.handlePrevious)))
 	mux.Handle("POST /rooms/{room}/api/playback/previous", requireListener(http.HandlerFunc(s.handlePrevious)))
-	mux.Handle("POST /api/playback/skip", requireListener(http.HandlerFunc(s.handleSkip)))
 	mux.Handle("POST /rooms/{room}/api/playback/skip", requireListener(http.HandlerFunc(s.handleSkip)))
-	mux.Handle("POST /api/queue/remove", requireListener(http.HandlerFunc(s.handleQueueRemove)))
 	mux.Handle("POST /rooms/{room}/api/queue/remove", requireListener(http.HandlerFunc(s.handleQueueRemove)))
-	mux.Handle("POST /api/queue/clear", requireListener(http.HandlerFunc(s.handleQueueClear)))
 	mux.Handle("POST /rooms/{room}/api/queue/clear", requireListener(http.HandlerFunc(s.handleQueueClear)))
 	mux.Handle("POST /api/admin/play", requireAdmin(http.HandlerFunc(s.handlePlay)))
 	mux.Handle("POST /api/admin/pause", requireAdmin(http.HandlerFunc(s.handlePause)))
@@ -111,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/admin/rescan", requireAdmin(http.HandlerFunc(s.handleRescan)))
 	mux.Handle("GET /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("PUT /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfigUpdate)))
+	mux.Handle("GET /media/{id}/artwork", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleArtwork)))
 	mux.Handle("GET /media/", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleMedia)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -142,8 +127,10 @@ func isAuthRoute(path string) bool {
 		"/api/files",
 		"/api/health",
 		"/api/logs",
+		"/api/oauth2-redirect",
 		"/api/realtime",
 		"/api/settings",
+		"/api/sql",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
@@ -243,11 +230,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	lifetime := time.NewTimer(10 * time.Minute)
+	defer lifetime.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			s.logger.Info("listener request closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "error", r.Context().Err())
+			return
+		case <-lifetime.C:
+			s.logger.Info("listener refresh requested", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 			return
 		case state, ok := <-ch:
 			if !ok {
@@ -306,7 +298,7 @@ func (s *Server) roomSnapshot(ctx context.Context, room *Room) PlaybackState {
 	if !s.playbackExpired(ctx, state) {
 		return state
 	}
-	s.logger.Info("auto advancing expired playback", "room", room.ID, "track_id", state.CurrentTrackID, "playback_id", state.PlaybackID)
+	s.logger.Info("auto advancing expired playback", "room", room.ID, "track_id", state.CurrentTrackID)
 	return room.Playback.Ended(state.CurrentTrackID)
 }
 
@@ -583,18 +575,6 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	s.writeCommandState(w, r, "skip", room.Playback.Skip(), "room", room.ID)
 }
 
-func (s *Server) handleEnded(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	track, ok := s.readTrack(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "track_ended", room.Playback.Ended(track.ID), append([]any{"room", room.ID}, logTrack(track)...)...)
-}
-
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	s.logger.Info("library rescan started", "remote", r.RemoteAddr)
@@ -640,10 +620,31 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, media.Name(), media.ModTime(), media)
 }
 
+func (s *Server) handleArtwork(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid media id", http.StatusBadRequest)
+		return
+	}
+	data, mimeType, err := s.library.Artwork(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, musiclib.ErrTrackNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Warn("load media artwork", "remote", r.RemoteAddr, "track_id", id, "error", err)
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Write(data)
+}
+
 func (s *Server) writeViewState(w http.ResponseWriter, r *http.Request, state PlaybackState) {
 	view, err := s.viewState(r.Context(), state)
 	if err != nil {
-		s.logger.Warn("build view state", "remote", r.RemoteAddr, "revision", state.Revision, "error", err)
+		s.logger.Warn("build view state", "remote", r.RemoteAddr, "error", err)
 		writeError(w, err)
 		return
 	}
@@ -653,7 +654,7 @@ func (s *Server) writeViewState(w http.ResponseWriter, r *http.Request, state Pl
 func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event string, state PlaybackState, args ...any) {
 	view, err := s.viewState(r.Context(), state)
 	if err != nil {
-		s.logger.Warn("build view state", "remote", r.RemoteAddr, "revision", state.Revision, "error", err)
+		s.logger.Warn("build view state", "remote", r.RemoteAddr, "error", err)
 		writeError(w, err)
 		return
 	}
