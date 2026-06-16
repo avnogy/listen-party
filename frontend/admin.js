@@ -2,15 +2,13 @@ const configStatus = document.getElementById("configStatus");
 const configForm = document.getElementById("configForm");
 const configAddr = document.getElementById("configAddr");
 const configMusicDirs = document.getElementById("configMusicDirs");
-const configDatabasePath = document.getElementById("configDatabasePath");
 const configScanWorkers = document.getElementById("configScanWorkers");
-const configAuthDataDir = document.getElementById("configAuthDataDir");
-const configBootstrapEmail = document.getElementById("configBootstrapEmail");
 const configKeycloakEnabled = document.getElementById("configKeycloakEnabled");
 const configKeycloakIssuer = document.getElementById("configKeycloakIssuer");
 const configKeycloakClientID = document.getElementById("configKeycloakClientID");
 const configKeycloakClientSecret = document.getElementById("configKeycloakClientSecret");
 const configKeycloakDisplayName = document.getElementById("configKeycloakDisplayName");
+const addMusicDirButton = document.getElementById("addMusicDir");
 const addRoomButton = document.getElementById("addRoom");
 const roomsList = document.getElementById("roomsList");
 const rescanButton = document.getElementById("rescan");
@@ -28,11 +26,8 @@ function renderConfig(cfg) {
   const auth = cfg.auth?.pocketbase || {};
   const keycloak = auth.keycloak || {};
   configAddr.value = cfg.addr || "";
-  configMusicDirs.value = (cfg.music_dirs || []).join("\n");
-  configDatabasePath.value = cfg.database_path || "";
+  renderMusicDirs(cfg.music_dirs || []);
   configScanWorkers.value = cfg.scan_workers || 16;
-  configAuthDataDir.value = auth.data_dir || "";
-  configBootstrapEmail.value = auth.bootstrap_admin_email || "";
   configKeycloakEnabled.checked = Boolean(keycloak.enabled);
   configKeycloakIssuer.value = keycloak.issuer_url || "";
   configKeycloakClientID.value = keycloak.client_id || "";
@@ -41,21 +36,14 @@ function renderConfig(cfg) {
   renderRooms(cfg.rooms || [{id: "public", name: "Public Room", public: true}]);
 }
 
-function splitList(value) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
-
 function readConfigForm() {
   return {
     addr: configAddr.value.trim(),
-    music_dirs: configMusicDirs.value.split("\n").map((dir) => dir.trim()).filter(Boolean),
-    database_path: configDatabasePath.value.trim(),
+    music_dirs: readMusicDirs(),
     scan_workers: Math.max(1, Math.min(256, Math.floor(Number(configScanWorkers.value) || 16))),
     rooms: readRooms(),
     auth: {
       pocketbase: {
-        data_dir: configAuthDataDir.value.trim(),
-        bootstrap_admin_email: configBootstrapEmail.value.trim(),
         keycloak: {
           enabled: configKeycloakEnabled.checked,
           issuer_url: configKeycloakIssuer.value.trim(),
@@ -68,6 +56,89 @@ function readConfigForm() {
   };
 }
 
+function renderMusicDirs(paths) {
+  const rows = paths.length > 0 ? paths : [""];
+  configMusicDirs.replaceChildren(...rows.map((path) => renderListItem(path, "music-dir-input", "/path/to/music", "Music directory")));
+  updateListRemoveButtons(configMusicDirs);
+}
+
+function renderListItem(value, inputClass, placeholder, ariaLabel) {
+  const row = document.createElement("div");
+  row.className = "list-editor-item";
+
+  const input = document.createElement("input");
+  input.className = inputClass;
+  input.value = value;
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", ariaLabel);
+
+  const remove = document.createElement("button");
+  remove.className = "secondary compact icon-only trash-button list-editor-remove";
+  remove.type = "button";
+  remove.title = "Remove";
+  remove.setAttribute("aria-label", "Remove");
+  remove.append(document.createElement("span"));
+  remove.addEventListener("click", () => {
+    const list = row.parentElement;
+    row.remove();
+    updateListRemoveButtons(list);
+  });
+
+  row.append(input, remove);
+  return row;
+}
+
+function addMusicDir(path = "") {
+  const row = renderListItem(path, "music-dir-input", "/path/to/music", "Music directory");
+  configMusicDirs.append(row);
+  updateListRemoveButtons(configMusicDirs);
+  row.querySelector(".music-dir-input").focus();
+}
+
+function readMusicDirs() {
+  return [...configMusicDirs.querySelectorAll(".music-dir-input")].map((input) => input.value.trim()).filter(Boolean);
+}
+
+function updateListRemoveButtons(container) {
+  const buttons = container.querySelectorAll(".list-editor-remove");
+  buttons.forEach((button) => {
+    button.disabled = buttons.length <= 1;
+  });
+}
+
+function listEditor(title, inputClass, values, placeholder) {
+  const editor = document.createElement("div");
+  editor.className = "list-editor room-list-editor";
+
+  const head = document.createElement("div");
+  head.className = "list-editor-head";
+  const label = document.createElement("span");
+  label.textContent = title;
+  const add = document.createElement("button");
+  add.className = "secondary compact";
+  add.type = "button";
+  add.textContent = "Add";
+  head.append(label, add);
+
+  const list = document.createElement("div");
+  list.className = "list-editor-items";
+  const rows = values.length > 0 ? values : [""];
+  list.replaceChildren(...rows.map((value) => renderListItem(value, inputClass, placeholder, title)));
+
+  add.addEventListener("click", () => {
+    const row = renderListItem("", inputClass, placeholder, title);
+    list.append(row);
+    updateListRemoveButtons(list);
+    row.querySelector(`.${inputClass}`).focus();
+  });
+
+  editor.append(head, list);
+  updateListRemoveButtons(list);
+  return editor;
+}
+
 function renderRooms(rooms) {
   roomsList.replaceChildren(...rooms.map(renderRoomRow));
   updateRoomRemoveButtons();
@@ -76,11 +147,15 @@ function renderRooms(rooms) {
 function renderRoomRow(room = {}) {
   const row = document.createElement("div");
   row.className = "room-row";
+  const fields = document.createElement("div");
+  fields.className = "room-fields";
+  const main = document.createElement("div");
+  main.className = "room-main-row";
+  const access = document.createElement("div");
+  access.className = "room-access-row";
 
   const id = inputField("ID", "room-id", room.id || `room-${roomCounter++}`);
   const name = inputField("Name", "room-name", room.name || "New Room");
-  const roles = inputField("Allowed roles", "room-roles", (room.allowed_roles || []).join(", "));
-  const groups = inputField("Allowed groups", "room-groups", (room.allowed_groups || []).join(", "));
 
   const publicLabel = document.createElement("label");
   publicLabel.className = "checkbox-label room-public";
@@ -92,15 +167,23 @@ function renderRoomRow(room = {}) {
   publicLabel.lastElementChild.textContent = "Public";
 
   const remove = document.createElement("button");
-  remove.className = "secondary compact room-remove";
+  remove.className = "secondary compact icon-only trash-button room-remove";
   remove.type = "button";
-  remove.textContent = "Remove";
+  remove.title = "Remove room";
+  remove.setAttribute("aria-label", "Remove room");
+  remove.append(document.createElement("span"));
   remove.addEventListener("click", () => {
     row.remove();
     updateRoomRemoveButtons();
   });
 
-  row.append(id, name, publicLabel, roles, groups, remove);
+  main.append(id, name, publicLabel);
+  access.append(
+    listEditor("Allowed roles", "room-role-input", room.allowed_roles || [], "admin"),
+    listEditor("Allowed groups", "room-group-input", room.allowed_groups || [], "staff")
+  );
+  fields.append(main, access);
+  row.append(fields, remove);
   return row;
 }
 
@@ -129,8 +212,8 @@ function readRooms() {
     id: row.querySelector(".room-id").value.trim(),
     name: row.querySelector(".room-name").value.trim(),
     public: row.querySelector(".room-public-input").checked,
-    allowed_roles: splitList(row.querySelector(".room-roles").value),
-    allowed_groups: splitList(row.querySelector(".room-groups").value),
+    allowed_roles: [...row.querySelectorAll(".room-role-input")].map((input) => input.value.trim()).filter(Boolean),
+    allowed_groups: [...row.querySelectorAll(".room-group-input")].map((input) => input.value.trim()).filter(Boolean),
   }));
 }
 
@@ -146,9 +229,8 @@ async function api(path, options = {}) {
 async function loadConfig() {
   setStatus("Loading...", "working");
   try {
-    const view = await api("/api/admin/config");
-    renderConfig(view.config);
-    setStatus(view.path ? `Loaded ${view.path}` : "Loaded", "ok");
+    renderConfig(await api("/api/admin/config"));
+    setStatus("Loaded", "ok");
   } catch (err) {
     setStatus("Could not load config", "error");
     console.error(err);
@@ -207,16 +289,19 @@ configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setStatus("Saving...", "working");
   try {
-    const view = await api("/api/admin/config", {
+    renderConfig(await api("/api/admin/config", {
       method: "PUT",
       body: JSON.stringify(readConfigForm()),
-    });
-    renderConfig(view.config);
-    setStatus(view.restart_needed ? "Saved; restart required for address, database, or auth changes" : "Saved", "ok");
+    }));
+    setStatus("Saved", "ok");
   } catch (err) {
     setStatus("Save failed", "error");
     console.error(err);
   }
+});
+
+addMusicDirButton.addEventListener("click", () => {
+  addMusicDir();
 });
 
 addRoomButton.addEventListener("click", () => {

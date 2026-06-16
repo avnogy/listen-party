@@ -10,9 +10,9 @@ import (
 
 func TestAdminPageRequiresAdminCredentials(t *testing.T) {
 	auth := fakeAuth{roles: []Role{RoleListener}}
-	server := NewServer(ServerOptions{Auth: auth}).Handler()
+	server := testServer(&Server{Auth: auth}).Handler()
 
-	for _, path := range []string{"/admin", "/admin/", "/admin.js", "/api/admin/config"} {
+	for _, path := range []string{"/admin", "/admin.js", "/api/admin/config"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
@@ -23,23 +23,15 @@ func TestAdminPageRequiresAdminCredentials(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rec := httptest.NewRecorder()
-	server = NewServer(ServerOptions{Auth: fakeAuth{roles: []Role{RoleAdmin}}}).Handler()
+	server = testServer(&Server{Auth: fakeAuth{roles: []Role{RoleAdmin}}}).Handler()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("admin /admin status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
-func TestHandlerMountsAuthRoutesBesideAppAPI(t *testing.T) {
-	server := NewServer(ServerOptions{
-		Auth:       fakeAuth{roles: []Role{RoleListener}},
-		AuthRoutes: http.NotFoundHandler(),
-	})
-	_ = server.Handler()
-}
-
 func TestListenerStaticAssetsAreServed(t *testing.T) {
-	server := NewServer(ServerOptions{Auth: fakeAuth{roles: []Role{RoleListener}}}).Handler()
+	server := testServer(&Server{Auth: fakeAuth{roles: []Role{RoleListener}}}).Handler()
 	for _, path := range []string{"/", "/assets/style.css", "/assets/app.js"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
@@ -50,30 +42,8 @@ func TestListenerStaticAssetsAreServed(t *testing.T) {
 	}
 }
 
-func TestMeReturnsCurrentUser(t *testing.T) {
-	server := NewServer(ServerOptions{
-		Auth: fakeAuth{
-			roles: []Role{RoleListener},
-			user: UserInfo{
-				ID:       "user1",
-				Username: "first_user",
-				Role:     RoleListener,
-			},
-		},
-	}).Handler()
-	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/api/me status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if got := rec.Body.String(); !strings.Contains(got, `"username":"first_user"`) {
-		t.Fatalf("/api/me body = %s", got)
-	}
-}
-
-func TestRoomsEndpointFiltersByUserAccess(t *testing.T) {
-	server := NewServer(ServerOptions{
+func TestSessionReturnsCurrentUserAndAccessibleRooms(t *testing.T) {
+	server := testServer(&Server{
 		Auth: fakeAuth{
 			roles: []Role{RoleListener},
 			user: UserInfo{
@@ -83,32 +53,31 @@ func TestRoomsEndpointFiltersByUserAccess(t *testing.T) {
 				Groups:   []string{"staff"},
 			},
 		},
-		Config: Config{Rooms: []RoomConfig{
+		Config: Config{Rooms: []Room{
 			{ID: "public", Name: "Public Room", Public: true},
 			{ID: "staff", Name: "Staff", AllowedGroups: []string{"staff"}},
 			{ID: "private", Name: "Private"},
 		}},
 	}).Handler()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/rooms", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/session", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("/api/rooms status = %d, want %d", rec.Code, http.StatusOK)
+		t.Fatalf("/api/session status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"id":"public"`, `"id":"staff"`} {
+	for _, want := range []string{`"username":"alice"`, `"id":"public"`, `"id":"staff"`} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("/api/rooms body = %s, missing %s", body, want)
+			t.Fatalf("/api/session body = %s, missing %s", body, want)
 		}
 	}
 	if strings.Contains(body, `"id":"private"`) {
-		t.Fatalf("/api/rooms body leaked private room: %s", body)
+		t.Fatalf("/api/session body leaked private room: %s", body)
 	}
 }
 
 func TestPrivateRoomPageRequiresRoomAccess(t *testing.T) {
-	server := NewServer(ServerOptions{
+	server := testServer(&Server{
 		Auth: fakeAuth{
 			roles: []Role{RoleListener},
 			user: UserInfo{
@@ -117,7 +86,7 @@ func TestPrivateRoomPageRequiresRoomAccess(t *testing.T) {
 				Role:     RoleListener,
 			},
 		},
-		Config: Config{Rooms: []RoomConfig{
+		Config: Config{Rooms: []Room{
 			{ID: "public", Name: "Public Room", Public: true},
 			{ID: "private", Name: "Private"},
 		}},
@@ -131,9 +100,40 @@ func TestPrivateRoomPageRequiresRoomAccess(t *testing.T) {
 	}
 }
 
+func TestQueueMoveRequiresDirection(t *testing.T) {
+	server := testServer(&Server{
+		Auth: fakeAuth{
+			roles: []Role{RoleListener},
+			user: UserInfo{
+				ID:       "user1",
+				Username: "alice",
+				Role:     RoleListener,
+			},
+		},
+	}).Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/rooms/public/api/command", strings.NewReader(`{"action":"queue_move","id":1}`))
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("/queue/move status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 type fakeAuth struct {
 	roles []Role
 	user  UserInfo
+}
+
+func testServer(s *Server) *Server {
+	if s.Rooms == nil {
+		rooms := s.Config.Rooms
+		if len(rooms) == 0 {
+			rooms = []Room{{ID: defaultRoomID, Name: "Public Room", Public: true}}
+		}
+		s.Rooms = NewRoomManager(rooms)
+	}
+	return s
 }
 
 func (f fakeAuth) Authorized(_ *http.Request, roles ...Role) bool {

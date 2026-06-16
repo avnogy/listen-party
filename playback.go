@@ -9,36 +9,23 @@ import (
 
 var ErrEmptyQueue = errors.New("queue is empty")
 
-type QueueItem struct {
-	ID          int64     `json:"id"`
+type PlaybackItem struct {
+	ID          int64     `json:"id,omitempty"`
 	TrackID     int64     `json:"track_id"`
-	AddedAt     time.Time `json:"added_at"`
-	RequestedBy string    `json:"requested_by"`
-}
-
-type PlayedItem struct {
-	TrackID     int64     `json:"track_id"`
-	PlayedAt    time.Time `json:"played_at"`
+	At          time.Time `json:"at"`
 	RequestedBy string    `json:"requested_by"`
 }
 
 type PlaybackState struct {
-	RoomID             string       `json:"room_id"`
-	CurrentTrackID     int64        `json:"current_track_id"`
-	CurrentRequestedBy string       `json:"current_requested_by"`
-	StartedAt          time.Time    `json:"started_at"`
-	Paused             bool         `json:"paused"`
-	PositionAtPauseMS  int64        `json:"position_at_pause_ms"`
-	Queue              []QueueItem  `json:"queue"`
-	History            []PlayedItem `json:"history"`
-	ListenerCount      int          `json:"listener_count"`
-	Listeners          []string     `json:"listeners"`
-	ServerTime         time.Time    `json:"server_time"`
-}
-
-type ActiveListener struct {
-	UserID   string
-	Username string
+	RoomID            string         `json:"room_id"`
+	Current           PlaybackItem   `json:"-"`
+	StartedAt         time.Time      `json:"started_at"`
+	Paused            bool           `json:"paused"`
+	PositionAtPauseMS int64          `json:"position_at_pause_ms"`
+	Queue             []PlaybackItem `json:"queue"`
+	History           []PlaybackItem `json:"history"`
+	Listeners         []string       `json:"listeners"`
+	ServerTime        time.Time      `json:"server_time"`
 }
 
 type Playback struct {
@@ -50,15 +37,15 @@ type Playback struct {
 	started            time.Time
 	paused             bool
 	pausePos           int64
-	queue              []QueueItem
-	history            []PlayedItem
-	notify             map[chan PlaybackState]ActiveListener
+	queue              []PlaybackItem
+	history            []PlaybackItem
+	notify             map[chan PlaybackState]UserInfo
 }
 
 func NewPlayback(roomID string) *Playback {
 	return &Playback{
 		roomID: roomID,
-		notify: make(map[chan PlaybackState]ActiveListener),
+		notify: make(map[chan PlaybackState]UserInfo),
 	}
 }
 
@@ -67,7 +54,7 @@ func (p *Playback) Add(trackID int64, requestedBy string) PlaybackState {
 	defer p.mu.Unlock()
 
 	p.nextID++
-	p.queue = append(p.queue, QueueItem{ID: p.nextID, TrackID: trackID, AddedAt: time.Now(), RequestedBy: requestedBy})
+	p.queue = append(p.queue, PlaybackItem{ID: p.nextID, TrackID: trackID, At: time.Now(), RequestedBy: requestedBy})
 	p.bumpLocked()
 	return p.stateLocked()
 }
@@ -156,7 +143,7 @@ func (p *Playback) Previous() PlaybackState {
 	p.history = p.history[1:]
 	if p.current != 0 {
 		p.nextID++
-		p.queue = append([]QueueItem{{ID: p.nextID, TrackID: p.current, AddedAt: time.Now(), RequestedBy: p.currentRequestedBy}}, p.queue...)
+		p.queue = append([]PlaybackItem{{ID: p.nextID, TrackID: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy}}, p.queue...)
 	}
 	p.current = item.TrackID
 	p.currentRequestedBy = item.RequestedBy
@@ -257,11 +244,11 @@ func (p *Playback) Snapshot() PlaybackState {
 	return p.stateLocked()
 }
 
-func (p *Playback) Subscribe(listener ActiveListener) (<-chan PlaybackState, func()) {
+func (p *Playback) Subscribe(listener UserInfo) (<-chan PlaybackState, func()) {
 	ch := make(chan PlaybackState, 8)
 	p.mu.Lock()
 	if p.notify == nil {
-		p.notify = make(map[chan PlaybackState]ActiveListener)
+		p.notify = make(map[chan PlaybackState]UserInfo)
 	}
 	p.notify[ch] = listener
 	ch <- p.stateLocked()
@@ -323,7 +310,7 @@ func (p *Playback) recordCurrentLocked() {
 	if p.current == 0 {
 		return
 	}
-	p.history = append([]PlayedItem{{TrackID: p.current, PlayedAt: time.Now(), RequestedBy: p.currentRequestedBy}}, p.history...)
+	p.history = append([]PlaybackItem{{TrackID: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy}}, p.history...)
 	if len(p.history) > 25 {
 		p.history = p.history[:25]
 	}
@@ -340,28 +327,26 @@ func (p *Playback) bumpLocked() {
 }
 
 func (p *Playback) stateLocked() PlaybackState {
-	queue := append([]QueueItem(nil), p.queue...)
-	history := append([]PlayedItem(nil), p.history...)
+	queue := append([]PlaybackItem(nil), p.queue...)
+	history := append([]PlaybackItem(nil), p.history...)
 	listeners := p.listenersLocked()
 	return PlaybackState{
-		RoomID:             p.roomID,
-		CurrentTrackID:     p.current,
-		CurrentRequestedBy: p.currentRequestedBy,
-		StartedAt:          p.started,
-		Paused:             p.paused,
-		PositionAtPauseMS:  p.pausePos,
-		Queue:              queue,
-		History:            history,
-		ListenerCount:      len(listeners),
-		Listeners:          listeners,
-		ServerTime:         time.Now(),
+		RoomID:            p.roomID,
+		Current:           PlaybackItem{TrackID: p.current, At: p.started, RequestedBy: p.currentRequestedBy},
+		StartedAt:         p.started,
+		Paused:            p.paused,
+		PositionAtPauseMS: p.pausePos,
+		Queue:             queue,
+		History:           history,
+		Listeners:         listeners,
+		ServerTime:        time.Now(),
 	}
 }
 
 func (p *Playback) listenersLocked() []string {
 	seen := make(map[string]string, len(p.notify))
 	for _, listener := range p.notify {
-		key := listener.UserID
+		key := listener.ID
 		if key == "" {
 			key = listener.Username
 		}

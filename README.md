@@ -94,10 +94,12 @@ Runtime config is JSON. By default it lives at:
 ${UserConfigDir}/listen-party/config.json
 ```
 
-Default database path:
+Runtime storage is derived from the directory that contains `config.json`.
+With the default config path, derived paths are:
 
 ```text
 ${UserConfigDir}/listen-party/listen-party.sqlite
+${UserConfigDir}/listen-party/auth
 ```
 
 Default config:
@@ -106,7 +108,6 @@ Default config:
 {
   "addr": "0.0.0.0:8080",
   "music_dirs": ["${UserConfigDir}/listen-party/music"],
-  "database_path": "${UserConfigDir}/listen-party/listen-party.sqlite",
   "scan_workers": 16,
   "rooms": [
     {
@@ -117,8 +118,6 @@ Default config:
   ],
   "auth": {
     "pocketbase": {
-      "data_dir": "${UserConfigDir}/listen-party/auth",
-      "bootstrap_admin_email": "admin@listen-party.local",
       "keycloak": {
         "enabled": false,
         "issuer_url": "",
@@ -139,6 +138,9 @@ Use a custom config path:
 ```sh
 ./build/lp -config ./config.json
 ```
+
+For a custom config path, the SQLite database and PocketBase auth data directory
+are derived from the directory containing that config file.
 
 The admin page can edit the config:
 
@@ -195,11 +197,11 @@ Keycloak login, listen-party copies that claim into the PocketBase
 `users.groups` field. Missing `groups` claims leave existing PocketBase groups
 unchanged.
 
-Changing `addr`, `database_path`, or auth provider settings requires a restart.
-Updating music directories or scan worker count applies immediately; use the
-admin rescan button to refresh the library after changing music folders.
-Updating rooms also applies immediately for new room enumeration and API
-requests. `scan_workers` must be between 1 and 256.
+Changing `addr`, the config path, or auth provider settings requires a restart.
+Updating music directories or scan worker count applies immediately; use the admin
+rescan button to refresh the library after changing music folders. Updating rooms
+also applies immediately for new room enumeration and API requests.
+`scan_workers` must be between 1 and 256.
 
 Room IDs must be lowercase URL-safe text. A public room is visible to every
 authenticated app user. Admin users can access every room. For private room

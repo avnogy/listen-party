@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -30,11 +31,7 @@ func main() {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	configDir, err := DefaultConfigDir()
-	if err != nil {
-		slog.Error("resolve config directory", "error", err)
-		os.Exit(1)
-	}
+	configDir := filepath.Dir(resolvedConfigPath)
 	slog.Info("listen-party config directory", "path", configDir)
 	slog.Info("listen-party config loaded",
 		"path", resolvedConfigPath,
@@ -57,15 +54,14 @@ func main() {
 	}
 	defer authSvc.Close()
 
-	app := NewServer(ServerOptions{
+	app := &Server{
 		Auth:       authSvc,
 		AuthRoutes: authSvc.Handler(),
 		Library:    lib,
 		Rooms:      NewRoomManager(cfg.Rooms),
 		Config:     cfg,
 		ConfigPath: resolvedConfigPath,
-		Logger:     slog.Default(),
-	})
+	}
 
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	defer stopServer()

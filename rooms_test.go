@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestRoomManagerPreservesPlaybackForUnchangedRooms(t *testing.T) {
-	rooms := NewRoomManager([]RoomConfig{
+	rooms := NewRoomManager([]Room{
 		{ID: "public", Name: "Public Room", Public: true},
 		{ID: "office", Name: "Office"},
 	})
@@ -13,7 +13,7 @@ func TestRoomManagerPreservesPlaybackForUnchangedRooms(t *testing.T) {
 	}
 	office.Playback.Add(10, "alice")
 
-	rooms.Update([]RoomConfig{
+	rooms.Update([]Room{
 		{ID: "public", Name: "Public Room", Public: true},
 		{ID: "office", Name: "Office Renamed"},
 	})
@@ -30,7 +30,7 @@ func TestRoomManagerPreservesPlaybackForUnchangedRooms(t *testing.T) {
 }
 
 func TestRoomManagerClosesRemovedRoomSubscribers(t *testing.T) {
-	rooms := NewRoomManager([]RoomConfig{
+	rooms := NewRoomManager([]Room{
 		{ID: "public", Name: "Public Room", Public: true},
 		{ID: "office", Name: "Office"},
 	})
@@ -38,11 +38,11 @@ func TestRoomManagerClosesRemovedRoomSubscribers(t *testing.T) {
 	if !ok {
 		t.Fatal("office room missing")
 	}
-	ch, cancel := office.Playback.Subscribe(ActiveListener{UserID: "user1", Username: "alice"})
+	ch, cancel := office.Playback.Subscribe(UserInfo{ID: "user1", Username: "alice"})
 	defer cancel()
 	<-ch
 
-	rooms.Update([]RoomConfig{{ID: "public", Name: "Public Room", Public: true}})
+	rooms.Update([]Room{{ID: "public", Name: "Public Room", Public: true}})
 
 	if _, ok := <-ch; ok {
 		t.Fatal("removed room subscription remained open")

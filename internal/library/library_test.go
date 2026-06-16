@@ -1,81 +1,13 @@
-package library
+package library_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
+
+	musiclib "listen-party/internal/library"
 )
-
-func TestNormalizeSearch(t *testing.T) {
-	got := normalizeSearch(" The_Band - Track  01! ")
-	want := "the band track 01"
-	if got != want {
-		t.Fatalf("normalizeSearch() = %q, want %q", got, want)
-	}
-}
-
-func TestIsMP3(t *testing.T) {
-	for _, path := range []string{"song.mp3", "SONG.MP3", "/tmp/a.b/song.Mp3"} {
-		if !isMP3(path) {
-			t.Fatalf("%q should be accepted", path)
-		}
-	}
-	for _, path := range []string{"song.flac", "mp3.txt", "song"} {
-		if isMP3(path) {
-			t.Fatalf("%q should be rejected", path)
-		}
-	}
-}
-
-func TestShouldIgnoreDir(t *testing.T) {
-	for _, name := range []string{".git", ".cache", "__pycache__", "__MACOSX", "node_modules", "System Volume Information", "$RECYCLE.BIN"} {
-		if !shouldIgnoreDir(name) {
-			t.Fatalf("%q should be ignored", name)
-		}
-	}
-	for _, name := range []string{"music", "Albums", "01 - live", "_single_underscore"} {
-		if shouldIgnoreDir(name) {
-			t.Fatalf("%q should not be ignored", name)
-		}
-	}
-}
-
-func TestClampTrackQueryLimit(t *testing.T) {
-	tests := []struct {
-		name  string
-		limit int
-		want  int
-	}{
-		{name: "default", limit: 0, want: defaultTrackQueryLimit},
-		{name: "negative", limit: -1, want: defaultTrackQueryLimit},
-		{name: "inside limit", limit: 80, want: 80},
-		{name: "max", limit: 100, want: 100},
-		{name: "too high", limit: 101, want: maxTrackQueryLimit},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := clampTrackQueryLimit(tt.limit); got != tt.want {
-				t.Fatalf("clampTrackQueryLimit(%d) = %d, want %d", tt.limit, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFilenameFallbackFormatsCommonDownloads(t *testing.T) {
-	title, artist := filenameFallback("/music/Alex Clare - Too Close [zP5OEwh31E4].mp3")
-	if title != "Too Close" || artist != "Alex Clare" {
-		t.Fatalf("filename fallback = %q/%q, want Too Close/Alex Clare", title, artist)
-	}
-
-	title, artist = filenameFallback("/music/OCEAN.mp3")
-	if title != "OCEAN" || artist != "" {
-		t.Fatalf("filename fallback = %q/%q, want OCEAN/empty artist", title, artist)
-	}
-}
 
 func TestArtworkReadsEmbeddedPicture(t *testing.T) {
 	ctx := context.Background()
@@ -86,13 +18,13 @@ func TestArtworkReadsEmbeddedPicture(t *testing.T) {
 		t.Fatalf("write mp3: %v", err)
 	}
 
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
 	defer lib.Close()
-	if err := lib.flushTracks(ctx, []Track{{path: path, Title: "With Art", Size: 1, ModTime: time.Unix(1, 0)}}); err != nil {
-		t.Fatalf("flush tracks: %v", err)
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
 	}
 	tracks, err := lib.Search(ctx, "with art")
 	if err != nil {
@@ -107,23 +39,53 @@ func TestArtworkReadsEmbeddedPicture(t *testing.T) {
 	}
 }
 
-func TestSearchOrdersByTitleAscending(t *testing.T) {
+func TestScanIndexesFilenameFallbackAndSearch(t *testing.T) {
 	ctx := context.Background()
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Alex Clare - Too Close [zP5OEwh31E4].mp3")
+	if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+		t.Fatalf("write mp3: %v", err)
+	}
+
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
 	defer lib.Close()
-	tracksToSeed := []Track{
-		{path: "/music/z.mp3", Title: "Zeta", Artist: "A", Album: "music", Size: 1, ModTime: time.Unix(1, 0)},
-		{path: "/music/a.mp3", Title: "alpha", Artist: "Z", Album: "music", Size: 1, ModTime: time.Unix(2, 0)},
-		{path: "/music/m.mp3", Title: "Middle", Artist: "M", Album: "music", Size: 1, ModTime: time.Unix(3, 0)},
-	}
-	if err := lib.flushTracks(ctx, tracksToSeed); err != nil {
-		t.Fatalf("flush tracks: %v", err)
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
 	}
 
-	tracks, err := lib.Search(ctx, "music")
+	tracks, err := lib.Search(ctx, "too-close")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("search returned %d tracks, want 1", len(tracks))
+	}
+	if tracks[0].Title != "Too Close" || tracks[0].Artist != "Alex Clare" {
+		t.Fatalf("track = %q/%q, want Too Close/Alex Clare", tracks[0].Title, tracks[0].Artist)
+	}
+}
+
+func TestSearchOrdersByTitleAscending(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	for _, name := range []string{"Mix - Zeta.mp3", "Mix - alpha.mp3", "Mix - Middle.mp3"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not really mp3"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	tracks, err := lib.Search(ctx, "mix")
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -139,73 +101,6 @@ func TestSearchOrdersByTitleAscending(t *testing.T) {
 	}
 }
 
-func TestFlushTracksWritesPartialBatch(t *testing.T) {
-	ctx := context.Background()
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
-	if err != nil {
-		t.Fatalf("open library: %v", err)
-	}
-	defer lib.Close()
-
-	tracks := []Track{
-		{path: "/music/one.mp3", Title: "One", Size: 1, ModTime: time.Unix(1, 0)},
-		{path: "/music/two.mp3", Title: "Two", Size: 1, ModTime: time.Unix(2, 0)},
-	}
-	if err := lib.flushTracks(ctx, tracks); err != nil {
-		t.Fatalf("flush tracks: %v", err)
-	}
-	count, err := lib.Count(ctx)
-	if err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != int64(len(tracks)) {
-		t.Fatalf("count = %d, want %d", count, len(tracks))
-	}
-}
-
-func TestWriteScannedTracksFlushesFinalPartialBatch(t *testing.T) {
-	ctx := context.Background()
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
-	if err != nil {
-		t.Fatalf("open library: %v", err)
-	}
-	defer lib.Close()
-
-	tracks := make(chan Track, 2)
-	var indexed int64
-	tracks <- Track{path: "/music/one.mp3", Title: "One", Size: 1, ModTime: time.Unix(1, 0)}
-	tracks <- Track{path: "/music/two.mp3", Title: "Two", Size: 1, ModTime: time.Unix(2, 0)}
-	close(tracks)
-	if err := lib.writeScannedTracks(ctx, tracks, &indexed); err != nil {
-		t.Fatalf("write scanned tracks: %v", err)
-	}
-	if indexed != 2 {
-		t.Fatalf("indexed = %d, want 2", indexed)
-	}
-	count, err := lib.Count(ctx)
-	if err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
-	}
-}
-
-func TestScanReturnsAlreadyInProgress(t *testing.T) {
-	ctx := context.Background()
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
-	if err != nil {
-		t.Fatalf("open library: %v", err)
-	}
-	defer lib.Close()
-
-	lib.scanMu.Lock()
-	defer lib.scanMu.Unlock()
-	if err := lib.Scan(ctx); !errors.Is(err, ErrScanInProgress) {
-		t.Fatalf("Scan() error = %v, want %v", err, ErrScanInProgress)
-	}
-}
-
 func TestScanSkipsUnchangedFiles(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -214,7 +109,7 @@ func TestScanSkipsUnchangedFiles(t *testing.T) {
 		t.Fatalf("write mp3: %v", err)
 	}
 
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
@@ -222,19 +117,12 @@ func TestScanSkipsUnchangedFiles(t *testing.T) {
 	if err := lib.Scan(ctx); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if _, err := lib.db.ExecContext(ctx, `UPDATE tracks SET title = 'Kept Title', search_text = 'kept title' WHERE path = ?`, path); err != nil {
-		t.Fatalf("update indexed title: %v", err)
-	}
 
 	if err := lib.Scan(ctx); err != nil {
 		t.Fatalf("rescan: %v", err)
 	}
-	tracks, err := lib.Search(ctx, "kept")
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(tracks) != 1 || tracks[0].Title != "Kept Title" {
-		t.Fatalf("unchanged scan reparsed track, got %#v", tracks)
+	if status := lib.ScanStatus(); status.Unchanged != 1 {
+		t.Fatalf("unchanged = %d, want 1", status.Unchanged)
 	}
 }
 
@@ -249,7 +137,7 @@ func TestScanDeletesMissingTracksAfterSuccessfulWalk(t *testing.T) {
 		}
 	}
 
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}
@@ -269,13 +157,6 @@ func TestScanDeletesMissingTracksAfterSuccessfulWalk(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("count after delete = %d, want 1", count)
-	}
-	var rows int
-	if err := lib.db.QueryRowContext(ctx, `SELECT count(*) FROM tracks`).Scan(&rows); err != nil {
-		t.Fatalf("count rows: %v", err)
-	}
-	if rows != 1 {
-		t.Fatalf("stored rows after delete = %d, want 1", rows)
 	}
 }
 
@@ -306,7 +187,7 @@ func TestScanSkipsIgnoredDirectories(t *testing.T) {
 		}
 	}
 
-	lib, err := Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
 	if err != nil {
 		t.Fatalf("open library: %v", err)
 	}

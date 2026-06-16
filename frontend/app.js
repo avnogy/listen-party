@@ -22,42 +22,46 @@ const libraryStatus = document.getElementById("libraryStatus");
 const currentUserEl = document.getElementById("currentUser");
 const roomSelect = document.getElementById("roomSelect");
 const logoutForm = document.getElementById("logoutForm");
-const volumeStorageKey = "listen-party-volume";
-const mutedStorageKey = "listen-party-muted";
-const syncToleranceSeconds = 0.05;
-const syncGuardMS = 50;
+const defaultVolume = 0.25;
+const syncToleranceSeconds = 1;
+const syncGuardMS = 1000;
 const searchDebounceMS = 300;
 
-let currentID = 0;
 let lastState = null;
 let lastStateReceivedAt = 0;
 let searchTimer = 0;
 let seeking = false;
-let lastVolume = 1;
-let localVolume = 1;
-let localMuted = false;
-let audioContext = null;
-let gainNode = null;
-let mediaSource = null;
 let events = null;
 
-function currentRoomIDFromPath() {
-  const match = location.pathname.match(/^\/rooms\/([^/]+)/);
-  return match ? decodeURIComponent(match[1]) : "";
-}
-
-let currentRoomID = currentRoomIDFromPath();
+let currentRoomID = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
 
 function roomAPI(path) {
   return `/rooms/${encodeURIComponent(currentRoomID)}${path}`;
 }
 
 function closeEvents() {
-  if (!events) {
+  events?.close();
+  events = null;
+}
+
+function hasMedia() {
+  return audio.hasAttribute("src");
+}
+
+function loadMedia(trackID) {
+  const src = `/media/${trackID}`;
+  if (audio.getAttribute("src") === src) {
     return;
   }
-  events.close();
-  events = null;
+  audio.src = src;
+  audio.load();
+  loadArtwork(trackID);
+}
+
+function syncCurrentAudio() {
+  if (lastState && hasMedia()) {
+    syncAudio(lastState);
+  }
 }
 
 function trackTitle(track) {
@@ -71,9 +75,7 @@ function trackContext(track) {
 }
 
 function trackSubtitle(track) {
-  const parts = [trackContext(track)].filter(Boolean);
-  if (track.track_no) parts.push(`Track ${track.track_no}`);
-  return parts.join(" · ");
+  return [trackContext(track), track?.track_no ? `Track ${track.track_no}` : ""].filter(Boolean).join(" · ");
 }
 
 function formatTime(seconds) {
@@ -88,7 +90,7 @@ function mediaDuration() {
   if (Number.isFinite(audio.duration) && audio.duration > 0) {
     return audio.duration;
   }
-  const indexedMS = lastState?.current?.duration_ms || 0;
+  const indexedMS = lastState?.current?.track?.duration_ms || 0;
   return indexedMS > 0 ? indexedMS / 1000 : 0;
 }
 
@@ -97,7 +99,7 @@ function setSeekUI(position) {
   const max = duration > 0 ? duration : Math.max(position, 0);
   const value = Math.min(position, max);
   seekInput.max = String(Math.ceil(max));
-  seekInput.disabled = !currentID;
+  seekInput.disabled = !hasMedia();
   if (!seeking) {
     seekInput.value = String(value);
   }
@@ -125,10 +127,17 @@ function renderPlaybackButton(playing) {
 }
 
 function renderVolumeButton() {
-  const muted = localMuted || localVolume === 0;
+  const muted = audio.muted || audio.volume === 0;
   muteButton.title = muted ? "Unmute" : "Mute";
   muteButton.setAttribute("aria-label", muted ? "Unmute" : "Mute");
   muteButton.classList.toggle("muted", muted);
+}
+
+function setVolume(value) {
+  const max = Number(volumeInput.max) || 1;
+  audio.volume = Math.max(0, Math.min(max, value));
+  audio.muted = audio.volume === 0;
+  volumeInput.value = String(audio.volume);
 }
 
 function clearArtwork() {
@@ -147,55 +156,6 @@ artworkEl.addEventListener("load", () => {
 
 artworkEl.addEventListener("error", clearArtwork);
 
-function loadLocalVolume() {
-  const storedVolume = Number(sessionStorage.getItem(volumeStorageKey));
-  if (Number.isFinite(storedVolume) && storedVolume >= 0 && storedVolume <= 1) {
-    localVolume = storedVolume;
-  }
-  localMuted = sessionStorage.getItem(mutedStorageKey) === "true" || localVolume === 0;
-  lastVolume = localVolume > 0 ? localVolume : 1;
-  volumeInput.value = String(localVolume);
-  audio.muted = false;
-  applyLocalVolume();
-}
-
-function saveLocalVolume() {
-  sessionStorage.setItem(volumeStorageKey, String(localVolume));
-  sessionStorage.setItem(mutedStorageKey, localMuted ? "true" : "false");
-}
-
-function ensureAudioGraph() {
-  if (gainNode) {
-    if (audioContext.state === "suspended") {
-      audioContext.resume().catch(console.error);
-    }
-    return;
-  }
-  const AudioContext = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContext) {
-    return;
-  }
-  audioContext = new AudioContext();
-  mediaSource = audioContext.createMediaElementSource(audio);
-  gainNode = audioContext.createGain();
-  mediaSource.connect(gainNode);
-  gainNode.connect(audioContext.destination);
-  audio.volume = 1;
-  audio.muted = false;
-  audioContext.resume().catch(console.error);
-}
-
-function applyLocalVolume() {
-  const gain = localMuted ? 0 : localVolume;
-  if (gainNode) {
-    gainNode.gain.setTargetAtTime(gain, audioContext.currentTime, 0.01);
-  } else {
-    audio.volume = gain;
-    audio.muted = false;
-  }
-  renderVolumeButton();
-}
-
 function renderState(state) {
   if (state.room_id && currentRoomID && state.room_id !== currentRoomID) {
     return;
@@ -204,13 +164,14 @@ function renderState(state) {
     return;
   }
 
-  const previousState = lastState;
   lastState = state;
   lastStateReceivedAt = Date.now();
 
+  const queue = state.queue || [];
+  const history = state.history || [];
   const current = state.current;
-  if (!current) {
-    currentID = 0;
+  const currentTrack = current?.track;
+  if (!currentTrack) {
     audio.pause();
     audio.removeAttribute("src");
     audio.load();
@@ -219,34 +180,25 @@ function renderState(state) {
     trackEl.textContent = "Nothing playing";
     artistEl.textContent = "";
   } else {
-    trackEl.textContent = trackTitle(current);
-    renderSubtitle(artistEl, trackContext(current), state.current_requested_by);
-    if (
-      currentID !== current.id ||
-      previousState?.room_id !== state.room_id ||
-      previousState?.started_at !== state.started_at
-    ) {
-      currentID = current.id;
-      audio.src = `/media/${current.id}`;
-      audio.load();
-      loadArtwork(current.id);
-    }
+    trackEl.textContent = trackTitle(currentTrack);
+    renderSubtitle(artistEl, trackContext(currentTrack), current.requested_by);
+    loadMedia(currentTrack.id);
     syncAudio(state);
   }
 
-  queueEl.replaceChildren(...state.queue.map(renderQueueItem));
-  renderHistory(state.history || []);
-  clearQueueButton.hidden = state.queue.length === 0;
-  clearHistoryButton.hidden = !state.history || state.history.length === 0;
+  queueEl.replaceChildren(...queue.map(renderQueueItem));
+  renderHistory(history);
+  clearQueueButton.hidden = queue.length === 0;
+  clearHistoryButton.hidden = history.length === 0;
   renderPresence(state);
-  previousButton.disabled = !state.history || state.history.length === 0;
-  togglePlaybackButton.disabled = !current && state.queue.length === 0;
-  renderPlaybackButton(Boolean(current && !state.paused));
+  previousButton.disabled = history.length === 0;
+  togglePlaybackButton.disabled = !currentTrack && queue.length === 0;
+  renderPlaybackButton(Boolean(currentTrack && !state.paused));
 }
 
 function renderPresence(state) {
   const listeners = Array.isArray(state.listeners) ? state.listeners : [];
-  const count = Number.isFinite(state.listener_count) ? state.listener_count : listeners.length;
+  const count = listeners.length;
   presenceEl.textContent = `${count} listener${count === 1 ? "" : "s"}`;
   listenerListEl.replaceChildren(...listeners.map((username) => {
     const item = document.createElement("div");
@@ -276,10 +228,10 @@ function renderQueueItem(item) {
   const actions = document.createElement("div");
   actions.className = "row-actions";
   actions.append(
-    stateButton("Next", "/api/queue/next", {id: item.id}),
-    stateButton("Up", "/api/queue/move", {id: item.id, direction: -1}),
-    stateButton("Down", "/api/queue/move", {id: item.id, direction: 1}),
-    stateButton("Remove", "/api/queue/remove", {id: item.id})
+    commandButton("Next", {action: "queue_next", id: item.id}),
+    commandButton("Up", {action: "queue_move", id: item.id, direction: -1}),
+    commandButton("Down", {action: "queue_move", id: item.id, direction: 1}),
+    commandButton("Remove", {action: "queue_remove", id: item.id})
   );
 
   li.append(meta, actions);
@@ -288,9 +240,10 @@ function renderQueueItem(item) {
 
 function renderHistoryItem(item) {
   const track = item.track;
+  const trackID = item.track_id;
   return trackRow(track || {id: item.track_id, title: `Track ${item.track_id}`}, [
-    ["Queue", async () => addTrack(item.track_id)],
-    ["Play", async () => playNow(item.track_id)],
+    ["Queue", {action: "queue_add", track_id: trackID}],
+    ["Play", {action: "play_now", track_id: trackID}],
   ], item.requested_by);
 }
 
@@ -305,18 +258,14 @@ function renderHistory(history) {
   historyEl.replaceChildren(...history.map(renderHistoryItem));
 }
 
-function rowButton(text, action) {
+function commandButton(text, body) {
   const button = document.createElement("button");
   button.className = "secondary compact";
   button.textContent = text;
-  button.addEventListener("click", action);
-  return button;
-}
-
-function stateButton(text, path, body = null) {
-  return rowButton(text, async () => {
-    await postState(roomAPI(path), body);
+  button.addEventListener("click", async () => {
+    await command(body);
   });
+  return button;
 }
 
 function trackMeta(titleText, subtitleText, requestedBy = "") {
@@ -343,7 +292,7 @@ function trackRow(track, actions, requestedBy = "") {
 
   const actionEl = document.createElement("div");
   actionEl.className = "row-actions";
-  actionEl.append(...actions.map(([text, action]) => rowButton(text, action)));
+  actionEl.append(...actions.map(([text, body]) => commandButton(text, body)));
 
   row.append(meta, actionEl);
   return row;
@@ -371,18 +320,12 @@ function renderSubtitle(element, subtitleText, requestedBy = "") {
   element.append(requester);
 }
 
-async function addTrack(trackID) {
-  await postState(roomAPI("/api/queue"), {track_id: trackID});
-}
-
-async function playNow(trackID) {
-  await postState(roomAPI("/api/playback/play-now"), {track_id: trackID});
-}
-
-async function postState(path, body = null) {
-  const options = {method: "POST"};
-  if (body) options.body = JSON.stringify(body);
-  renderState(await api(path, options));
+async function command(body) {
+  const state = await api(roomAPI("/api/command"), {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  renderState(state);
 }
 
 function setSyncedTime(target) {
@@ -397,6 +340,15 @@ function setSyncedTime(target) {
   }
 }
 
+function playAudio() {
+  if (!hasMedia()) {
+    return;
+  }
+  audio.play().catch((err) => {
+    console.warn("browser refused synchronized playback", err);
+  });
+}
+
 function syncAudio(state) {
   if (!state.started_at) {
     setSeekUI(0);
@@ -408,8 +360,8 @@ function syncAudio(state) {
     setSeekUI(duration);
     return;
   }
-  setSeekUI(target);
   if (state.paused) {
+    setSeekUI(target);
     setSyncedTime(target);
     if (!audio.paused) {
       audio.pause();
@@ -417,39 +369,24 @@ function syncAudio(state) {
     return;
   }
 
-  if (audio.paused) {
-    audio.play().catch((err) => {
-      console.warn("browser refused synchronized playback", err);
-    });
-  }
   setSyncedTime(target);
+  if (audio.paused) playAudio();
+  setSeekUI(audio.readyState >= HTMLMediaElement.HAVE_METADATA ? audio.currentTime : target);
 }
 
-setInterval(() => {
-  if (lastState && currentID) {
-    syncAudio(lastState);
-  }
-}, syncGuardMS);
+setInterval(syncCurrentAudio, syncGuardMS);
 
-audio.addEventListener("loadedmetadata", () => {
-  if (lastState && currentID) {
-    syncAudio(lastState);
-  } else {
-    setSeekUI(0);
-  }
-});
-
-audio.addEventListener("canplay", () => {
-  if (lastState && currentID) {
-    syncAudio(lastState);
-  }
-});
+for (const eventName of ["loadedmetadata", "canplay"]) {
+  audio.addEventListener(eventName, syncCurrentAudio);
+}
 
 audio.addEventListener("timeupdate", () => {
-  if (!seeking && currentID) {
+  if (!seeking && hasMedia()) {
     setSeekUI(audio.currentTime);
   }
 });
+
+audio.addEventListener("volumechange", renderVolumeButton);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -471,18 +408,9 @@ async function loadLibraryStatus() {
   }
 }
 
-async function loadCurrentUser() {
-  try {
-    const user = await api("/api/me");
-    currentUserEl.textContent = user.username || "Signed in";
-  } catch (err) {
-    currentUserEl.textContent = "Signed in";
-    console.error(err);
-  }
-}
-
 async function loadRooms() {
-  const info = await api("/api/rooms");
+  const info = await api("/api/session");
+  currentUserEl.textContent = info.user?.username || "Signed in";
   const rooms = info.rooms || [];
   if (!currentRoomID) {
     currentRoomID = info.default_room_id || (rooms[0] && rooms[0].id) || "public";
@@ -509,8 +437,8 @@ async function runSearch() {
     return;
   }
   resultsEl.replaceChildren(...tracks.map((track) => trackRow(track, [
-    ["Queue", async () => addTrack(track.id)],
-    ["Play", async () => playNow(track.id)],
+    ["Queue", {action: "queue_add", track_id: track.id}],
+    ["Play", {action: "play_now", track_id: track.id}],
   ])));
 }
 
@@ -527,18 +455,18 @@ searchInput.addEventListener("input", () => {
   }, searchDebounceMS);
 });
 
-for (const [id, path] of [["previous", "/api/playback/previous"], ["skip", "/api/playback/skip"]]) {
+for (const [id, action] of [["previous", "previous"], ["skip", "skip"]]) {
   document.getElementById(id).addEventListener("click", async () => {
-    await postState(roomAPI(path));
+    await command({action});
   });
 }
 
 togglePlaybackButton.addEventListener("click", async () => {
   if (lastState && lastState.current && !lastState.paused) {
-    await postState(roomAPI("/api/playback/pause"));
+    await command({action: "pause"});
     return;
   }
-  await postState(roomAPI("/api/playback/play"));
+  await command({action: "play"});
 });
 
 seekInput.addEventListener("input", () => {
@@ -547,44 +475,35 @@ seekInput.addEventListener("input", () => {
 });
 
 seekInput.addEventListener("change", async () => {
-  if (!currentID) {
+  if (!hasMedia()) {
     seeking = false;
     setSeekUI(0);
     return;
   }
   const positionMS = Math.max(0, Math.round(Number(seekInput.value) * 1000));
   seeking = false;
-  await postState(roomAPI("/api/playback/seek"), {position_ms: positionMS});
+  await command({action: "seek", position_ms: positionMS});
+  syncCurrentAudio();
 });
 
 volumeInput.addEventListener("input", () => {
-  ensureAudioGraph();
   const next = Number(volumeInput.value);
   if (!Number.isFinite(next)) return;
-  localVolume = Math.max(0, Math.min(1, next));
-  localMuted = localVolume === 0;
-  if (localVolume > 0) {
-    lastVolume = localVolume;
-  }
-  applyLocalVolume();
-});
-
-volumeInput.addEventListener("change", () => {
-  saveLocalVolume();
+  setVolume(next);
+  syncCurrentAudio();
 });
 
 muteButton.addEventListener("click", () => {
-  ensureAudioGraph();
-  if (localMuted || localVolume === 0) {
-    localMuted = false;
-    localVolume = lastVolume > 0 ? lastVolume : 1;
-    volumeInput.value = String(localVolume);
-  } else {
-    lastVolume = localVolume;
-    localMuted = true;
+  if (audio.muted || audio.volume === 0) {
+    if (audio.volume === 0) {
+      setVolume(defaultVolume);
+    }
+    audio.muted = false;
+    syncCurrentAudio();
+    return;
   }
-  applyLocalVolume();
-  saveLocalVolume();
+  audio.muted = true;
+  renderVolumeButton();
 });
 
 presenceButton.addEventListener("click", () => {
@@ -610,14 +529,15 @@ document.addEventListener("keydown", (event) => {
 });
 
 renderPlaybackButton(false);
-loadLocalVolume();
+setVolume(0);
+renderVolumeButton();
 
 clearQueueButton.addEventListener("click", async () => {
-  await postState(roomAPI("/api/queue/clear"));
+  await command({action: "queue_clear"});
 });
 
 clearHistoryButton.addEventListener("click", async () => {
-  await postState(roomAPI("/api/history/clear"));
+  await command({action: "history_clear"});
 });
 
 roomSelect.addEventListener("change", () => {
@@ -634,7 +554,6 @@ logoutForm.addEventListener("submit", () => {
 });
 
 window.addEventListener("pagehide", closeEvents);
-window.addEventListener("beforeunload", closeEvents);
 
 async function start() {
   if (!await loadRooms()) {
@@ -646,7 +565,6 @@ async function start() {
     renderState(JSON.parse(event.data));
   });
   loadLibraryStatus();
-  loadCurrentUser();
   runSearch().catch(console.error);
   api(roomAPI("/api/state")).then(renderState).catch(console.error);
 }

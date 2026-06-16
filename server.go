@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,96 +16,46 @@ import (
 	musiclib "listen-party/internal/library"
 )
 
-type ServerOptions struct {
+type Server struct {
 	Auth       AuthGate
 	AuthRoutes http.Handler
 	Library    *musiclib.Library
 	Rooms      *RoomManager
 	Config     Config
 	ConfigPath string
-	Logger     *slog.Logger
-}
-
-type Server struct {
-	auth       AuthGate
-	authRoutes http.Handler
-	library    *musiclib.Library
-	rooms      *RoomManager
 	configMu   sync.RWMutex
-	config     Config
-	configPath string
-	logger     *slog.Logger
-}
-
-func NewServer(opts ServerOptions) *Server {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
-	if opts.Rooms == nil {
-		if len(opts.Config.Rooms) > 0 {
-			opts.Rooms = NewRoomManager(opts.Config.Rooms)
-		} else {
-			opts.Rooms = NewRoomManager([]RoomConfig{{ID: defaultRoomID, Name: "Public Room", Public: true}})
-		}
-	}
-	return &Server{
-		auth:       opts.Auth,
-		authRoutes: opts.AuthRoutes,
-		library:    opts.Library,
-		rooms:      opts.Rooms,
-		config:     opts.Config,
-		configPath: opts.ConfigPath,
-		logger:     opts.Logger,
-	}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	requireAdmin := s.auth.Require(RoleAdmin)
+	requireAdmin := s.Auth.Require(RoleAdmin)
 	mux.Handle("GET /admin", requireAdmin(http.HandlerFunc(s.handleAdminPage)))
-	mux.Handle("GET /admin/", requireAdmin(http.HandlerFunc(s.handleAdminPage)))
 	mux.Handle("GET /admin.js", requireAdmin(http.HandlerFunc(s.handleAdminJS)))
-	requireListener := s.auth.Require(RoleListener, RoleAdmin)
+	requireListener := s.Auth.Require(RoleListener, RoleAdmin)
 	webFiles := http.FileServer(http.FS(webRoot()))
-	mux.Handle("GET /{$}", requireListener(http.HandlerFunc(s.handleDefaultRoom)))
-	mux.Handle("GET /rooms/{room}", requireListener(http.HandlerFunc(s.handleRoomPage)))
-	mux.Handle("GET /rooms/{room}/", requireListener(http.HandlerFunc(s.handleRoomPage)))
+	mux.Handle("GET /{$}", requireListener(http.HandlerFunc(s.handleApp)))
+	mux.Handle("GET /rooms/{room}", requireListener(http.HandlerFunc(s.handleApp)))
 	mux.Handle("GET /assets/", requireListener(http.StripPrefix("/assets/", webFiles)))
 	mux.Handle("GET /rooms/{room}/events", requireListener(http.HandlerFunc(s.handleEvents)))
-	mux.Handle("GET /api/me", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleMe)))
-	mux.Handle("GET /api/rooms", requireListener(http.HandlerFunc(s.handleRooms)))
+	mux.Handle("GET /api/session", requireListener(http.HandlerFunc(s.handleSession)))
 	mux.Handle("GET /rooms/{room}/api/state", requireListener(http.HandlerFunc(s.handleState)))
-	mux.Handle("GET /api/search", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleSearch)))
-	mux.Handle("GET /api/library", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleLibrary)))
-	mux.Handle("POST /rooms/{room}/api/queue", requireListener(http.HandlerFunc(s.handleQueue)))
-	mux.Handle("POST /rooms/{room}/api/queue/move", requireListener(http.HandlerFunc(s.handleQueueMove)))
-	mux.Handle("POST /rooms/{room}/api/queue/next", requireListener(http.HandlerFunc(s.handleQueueNext)))
-	mux.Handle("POST /rooms/{room}/api/history/clear", requireListener(http.HandlerFunc(s.handleHistoryClear)))
-	mux.Handle("POST /rooms/{room}/api/playback/play", requireListener(http.HandlerFunc(s.handlePlay)))
-	mux.Handle("POST /rooms/{room}/api/playback/play-now", requireListener(http.HandlerFunc(s.handlePlayNow)))
-	mux.Handle("POST /rooms/{room}/api/playback/pause", requireListener(http.HandlerFunc(s.handlePause)))
-	mux.Handle("POST /rooms/{room}/api/playback/seek", requireListener(http.HandlerFunc(s.handleSeek)))
-	mux.Handle("POST /rooms/{room}/api/playback/previous", requireListener(http.HandlerFunc(s.handlePrevious)))
-	mux.Handle("POST /rooms/{room}/api/playback/skip", requireListener(http.HandlerFunc(s.handleSkip)))
-	mux.Handle("POST /rooms/{room}/api/queue/remove", requireListener(http.HandlerFunc(s.handleQueueRemove)))
-	mux.Handle("POST /rooms/{room}/api/queue/clear", requireListener(http.HandlerFunc(s.handleQueueClear)))
-	mux.Handle("POST /api/admin/play", requireAdmin(http.HandlerFunc(s.handlePlay)))
-	mux.Handle("POST /api/admin/pause", requireAdmin(http.HandlerFunc(s.handlePause)))
-	mux.Handle("POST /api/admin/skip", requireAdmin(http.HandlerFunc(s.handleSkip)))
+	mux.Handle("GET /api/search", requireListener(http.HandlerFunc(s.handleSearch)))
+	mux.Handle("GET /api/library", requireListener(http.HandlerFunc(s.handleLibrary)))
+	mux.Handle("POST /rooms/{room}/api/command", requireListener(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/admin/rescan", requireAdmin(http.HandlerFunc(s.handleRescan)))
 	mux.Handle("GET /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfig)))
 	mux.Handle("PUT /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfigUpdate)))
-	mux.Handle("GET /media/{id}/artwork", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleArtwork)))
-	mux.Handle("GET /media/", s.auth.Require(RoleListener, RoleAdmin)(http.HandlerFunc(s.handleMedia)))
+	mux.Handle("GET /media/{id}/artwork", requireListener(http.HandlerFunc(s.handleArtwork)))
+	mux.Handle("GET /media/{id}", requireListener(http.HandlerFunc(s.handleMedia)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	if s.authRoutes == nil {
+	if s.AuthRoutes == nil {
 		return mux
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAuthRoute(r.URL.Path) {
-			s.authRoutes.ServeHTTP(w, r)
+			s.AuthRoutes.ServeHTTP(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -113,13 +63,11 @@ func (s *Server) Handler() http.Handler {
 }
 
 func isAuthRoute(path string) bool {
-	if path == "/login" || strings.HasPrefix(path, "/login/") ||
-		path == "/logout" || strings.HasPrefix(path, "/logout/") ||
-		path == "/authAdmin" || strings.HasPrefix(path, "/authAdmin/") ||
-		strings.HasPrefix(path, "/_/") {
-		return true
-	}
 	for _, prefix := range []string{
+		"/login",
+		"/logout",
+		"/authAdmin",
+		"/_",
 		"/api/backups",
 		"/api/batch",
 		"/api/collections",
@@ -139,24 +87,22 @@ func isAuthRoute(path string) bool {
 	return false
 }
 
-func (s *Server) handleDefaultRoom(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, webRoot(), "index.html")
-}
-
-func (s *Server) handleRoomPage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.roomFromRequest(w, r); !ok {
-		return
+func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("room") != "" {
+		if _, _, ok := s.roomFromRequest(w, r); !ok {
+			return
+		}
 	}
 	http.ServeFileFS(w, r, webRoot(), "index.html")
 }
 
-func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.auth.CurrentUser(r)
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	rooms := s.rooms.List()
+	rooms := s.Rooms.List()
 	visible := make([]Room, 0, len(rooms))
 	for _, room := range rooms {
 		if UserCanAccessRoom(user, room) {
@@ -164,31 +110,32 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"default_room_id": s.rooms.DefaultID(),
+		"default_room_id": s.Rooms.DefaultID(),
 		"rooms":           visible,
+		"user":            user,
 	})
 }
 
-func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*Room, bool) {
+func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*Room, UserInfo, bool) {
 	roomID := r.PathValue("room")
 	if roomID == "" {
-		roomID = s.rooms.DefaultID()
+		roomID = s.Rooms.DefaultID()
 	}
-	room, ok := s.rooms.Get(roomID)
+	room, ok := s.Rooms.Get(roomID)
 	if !ok {
 		http.Error(w, "room not found", http.StatusNotFound)
-		return nil, false
+		return nil, UserInfo{}, false
 	}
-	user, ok := s.auth.CurrentUser(r)
+	user, ok := s.Auth.CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return nil, false
+		return nil, UserInfo{}, false
 	}
 	if !UserCanAccessRoom(user, *room) {
 		http.Error(w, "room access denied", http.StatusForbidden)
-		return nil, false
+		return nil, UserInfo{}, false
 	}
-	return room, true
+	return room, user, true
 }
 
 func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
@@ -199,34 +146,20 @@ func (s *Server) handleAdminJS(w http.ResponseWriter, r *http.Request) {
 	http.ServeFileFS(w, r, adminRoot(), "admin.js")
 }
 
-func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.auth.CurrentUser(r)
-	if !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	writeJSON(w, user)
-}
-
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
+	room, user, ok := s.roomFromRequest(w, r)
 	if !ok {
-		return
-	}
-	user, ok := s.auth.CurrentUser(r)
-	if !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	ch, cancel := room.Playback.Subscribe(ActiveListener{UserID: user.ID, Username: user.Username})
-	s.logger.Info("listener connected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", room.Playback.Snapshot().ListenerCount)
+	ch, cancel := room.Playback.Subscribe(user)
+	slog.Info("listener connected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", len(room.Playback.Snapshot().Listeners))
 	defer func() {
 		cancel()
-		s.logger.Info("listener disconnected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", room.Playback.Snapshot().ListenerCount)
+		slog.Info("listener disconnected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", len(room.Playback.Snapshot().Listeners))
 	}()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -236,23 +169,23 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-			s.logger.Info("listener request closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "error", r.Context().Err())
+			slog.Info("listener request closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "error", r.Context().Err())
 			return
 		case <-lifetime.C:
-			s.logger.Info("listener refresh requested", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
+			slog.Info("listener refresh requested", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 			return
 		case state, ok := <-ch:
 			if !ok {
-				s.logger.Info("listener subscription closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
+				slog.Info("listener subscription closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 			if !s.writeEvent(w, r, state) {
-				s.logger.Info("listener sse write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
+				slog.Info("listener sse write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 		case <-ticker.C:
 			if !s.writeEvent(w, r, s.roomSnapshot(r.Context(), room)) {
-				s.logger.Info("listener heartbeat write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
+				slog.Info("listener heartbeat write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 		}
@@ -262,15 +195,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state PlaybackState) bool {
 	payload, err := s.viewState(r.Context(), state)
 	if err != nil {
-		s.logger.Warn("build sse state", "error", err)
+		slog.Warn("build sse state", "error", err)
 		return true
 	}
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		s.logger.Debug("set sse write deadline", "error", err)
+		slog.Debug("set sse write deadline", "error", err)
 	}
 	fmt.Fprintf(w, "event: state\ndata: ")
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		s.logger.Warn("write sse state", "error", err)
+		slog.Warn("write sse state", "error", err)
 		return false
 	}
 	fmt.Fprint(w, "\n")
@@ -281,7 +214,7 @@ func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state Playba
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
+	room, _, ok := s.roomFromRequest(w, r)
 	if !ok {
 		return
 	}
@@ -298,15 +231,15 @@ func (s *Server) roomSnapshot(ctx context.Context, room *Room) PlaybackState {
 	if !s.playbackExpired(ctx, state) {
 		return state
 	}
-	s.logger.Info("auto advancing expired playback", "room", room.ID, "track_id", state.CurrentTrackID)
-	return room.Playback.Ended(state.CurrentTrackID)
+	slog.Info("auto advancing expired playback", "room", room.ID, "track_id", state.Current.TrackID)
+	return room.Playback.Ended(state.Current.TrackID)
 }
 
 func (s *Server) playbackExpired(ctx context.Context, state PlaybackState) bool {
-	if s.library == nil || state.CurrentTrackID == 0 || state.Paused || state.StartedAt.IsZero() {
+	if s.Library == nil || state.Current.TrackID == 0 || state.Paused || state.StartedAt.IsZero() {
 		return false
 	}
-	track, err := s.library.Get(ctx, state.CurrentTrackID)
+	track, err := s.Library.Get(ctx, state.Current.TrackID)
 	if err != nil || track.DurationMS <= 0 {
 		return false
 	}
@@ -315,7 +248,7 @@ func (s *Server) playbackExpired(ctx context.Context, state PlaybackState) bool 
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	tracks, err := s.library.Search(r.Context(), q)
+	tracks, err := s.Library.Search(r.Context(), q)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -324,31 +257,22 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
-	count, err := s.library.Count(r.Context())
+	count, err := s.Library.Count(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{
 		"track_count": count,
-		"scan":        s.library.ScanStatus(),
+		"scan":        s.Library.ScanStatus(),
 	})
-}
-
-type ConfigView struct {
-	Path          string `json:"path"`
-	Config        Config `json:"config"`
-	RestartNeeded bool   `json:"restart_needed"`
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	s.configMu.RLock()
-	view := ConfigView{
-		Path:   s.configPath,
-		Config: s.config,
-	}
+	cfg := s.Config
 	s.configMu.RUnlock()
-	writeJSON(w, view)
+	writeJSON(w, cfg)
 }
 
 func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
@@ -356,262 +280,163 @@ func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &cfg) {
 		return
 	}
-	if err := cfg.ApplyDefaults(); err != nil {
-		s.logger.Warn("reject config update", "remote", r.RemoteAddr, "error", err)
+	s.configMu.RLock()
+	old := s.Config
+	path := s.ConfigPath
+	s.configMu.RUnlock()
+
+	if err := cfg.ApplyDefaultsForRoot(filepath.Dir(path)); err != nil {
+		slog.Warn("reject config update", "remote", r.RemoteAddr, "error", err)
 		writeError(w, err)
 		return
 	}
 
-	s.configMu.RLock()
-	old := s.config
-	path := s.configPath
-	s.configMu.RUnlock()
-
 	if err := SaveConfig(path, cfg); err != nil {
-		s.logger.Warn("save config failed", "remote", r.RemoteAddr, "path", path, "error", err)
+		slog.Warn("save config failed", "remote", r.RemoteAddr, "path", path, "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	s.library.UpdateScanConfig(cfg.MusicDirs, cfg.ScanWorkers)
-	s.rooms.Update(cfg.Rooms)
+	s.Library.UpdateScanConfig(cfg.MusicDirs, cfg.ScanWorkers)
+	s.Rooms.Update(cfg.Rooms)
 
 	s.configMu.Lock()
-	s.config = cfg
+	s.Config = cfg
 	s.configMu.Unlock()
 
-	s.logger.Info("config updated",
+	slog.Info("config updated",
 		"remote", r.RemoteAddr,
 		"path", path,
 		"addr_changed", cfg.Addr != old.Addr,
-		"database_changed", cfg.DatabasePath != old.DatabasePath,
 		"auth_changed", cfg.Auth.PocketBase != old.Auth.PocketBase,
 		"music_dirs", len(cfg.MusicDirs),
 		"scan_workers", cfg.ScanWorkers,
 	)
-	writeJSON(w, ConfigView{
-		Path:          path,
-		Config:        cfg,
-		RestartNeeded: cfg.Addr != old.Addr || cfg.DatabasePath != old.DatabasePath || cfg.Auth.PocketBase != old.Auth.PocketBase,
-	})
+	writeJSON(w, cfg)
 }
 
-func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	track, ok := s.readTrack(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "queue_add", room.Playback.Add(track.ID, s.actorUsername(r)), append([]any{"room", room.ID}, logTrack(track)...)...)
-}
-
-func (s *Server) handleQueueRemove(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	id, ok := readID(w, r)
-	if !ok {
-		return
-	}
-	logFields := append([]any{"room", room.ID}, s.logQueueItemTrack(r, room, id)...)
-	s.writeCommandState(w, r, "queue_remove", room.Playback.Remove(id), logFields...)
-}
-
-func (s *Server) handleQueueMove(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
+func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
+	room, user, ok := s.roomFromRequest(w, r)
 	if !ok {
 		return
 	}
 	var req struct {
-		ID        int64 `json:"id"`
-		Direction int   `json:"direction"`
+		Action     string `json:"action"`
+		TrackID    int64  `json:"track_id"`
+		ID         int64  `json:"id"`
+		Direction  int    `json:"direction"`
+		PositionMS int64  `json:"position_ms"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.ID <= 0 {
-		http.Error(w, "id is required", http.StatusBadRequest)
-		return
-	}
-	if req.Direction < 0 {
-		s.writeCommandState(w, r, "queue_move_up", room.Playback.Move(req.ID, -1), append([]any{"room", room.ID}, s.logQueueItemTrack(r, room, req.ID)...)...)
-		return
-	}
-	if req.Direction > 0 {
-		s.writeCommandState(w, r, "queue_move_down", room.Playback.Move(req.ID, 1), append([]any{"room", room.ID}, s.logQueueItemTrack(r, room, req.ID)...)...)
-		return
-	}
-	s.writeViewState(w, r, room.Playback.Snapshot())
-}
-
-func (s *Server) handleQueueNext(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	id, ok := readID(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "queue_next", room.Playback.MoveToNext(id), append([]any{"room", room.ID}, s.logQueueItemTrack(r, room, id)...)...)
-}
-
-func (s *Server) handleQueueClear(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	queueLen := len(room.Playback.Snapshot().Queue)
-	s.writeCommandState(w, r, "queue_clear", room.Playback.Clear(), "room", room.ID, "queue_count", queueLen)
-}
-
-func (s *Server) handleHistoryClear(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	historyLen := len(room.Playback.Snapshot().History)
-	s.writeCommandState(w, r, "history_clear", room.Playback.ClearHistory(), "room", room.ID, "history_count", historyLen)
-}
-
-func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	state, err := room.Playback.Play()
-	if err != nil {
-		s.logger.Warn("play rejected", "remote", r.RemoteAddr, "room", room.ID, "error", err)
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	s.writeCommandState(w, r, "play", state, "room", room.ID)
-}
-
-func (s *Server) handlePlayNow(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	track, ok := s.readTrack(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "play_now", room.Playback.PlayNow(track.ID, s.actorUsername(r)), append([]any{"room", room.ID}, logTrack(track)...)...)
-}
-
-func (s *Server) actorUsername(r *http.Request) string {
-	user, ok := s.auth.CurrentUser(r)
-	if !ok {
-		return ""
-	}
-	return user.Username
-}
-
-func (s *Server) readTrack(w http.ResponseWriter, r *http.Request) (musiclib.Track, bool) {
-	var req struct {
-		TrackID int64 `json:"track_id"`
-	}
-	if !readJSON(w, r, &req) {
-		return musiclib.Track{}, false
-	}
-	if req.TrackID <= 0 {
-		http.Error(w, "track_id is required", http.StatusBadRequest)
-		return musiclib.Track{}, false
-	}
-	track, err := s.library.Get(r.Context(), req.TrackID)
-	if err != nil {
-		if errors.Is(err, musiclib.ErrTrackNotFound) {
-			s.logger.Warn("track not found", "remote", r.RemoteAddr, "track_id", req.TrackID, "path", r.URL.Path)
-			http.Error(w, "track not found", http.StatusNotFound)
-			return musiclib.Track{}, false
+	switch req.Action {
+	case "queue_add":
+		if req.TrackID <= 0 {
+			http.Error(w, "track_id is required", http.StatusBadRequest)
+			return
 		}
-		s.logger.Warn("validate track", "remote", r.RemoteAddr, "track_id", req.TrackID, "path", r.URL.Path, "error", err)
-		writeError(w, err)
-		return musiclib.Track{}, false
+		s.writeCommandState(w, r, "queue_add", room, user.Username, room.Playback.Add(req.TrackID, user.Username))
+	case "queue_remove":
+		if !requireID(w, req.ID) {
+			return
+		}
+		s.writeCommandState(w, r, "queue_remove", room, user.Username, room.Playback.Remove(req.ID))
+	case "queue_move":
+		if !requireID(w, req.ID) {
+			return
+		}
+		if req.Direction == 0 {
+			http.Error(w, "direction is required", http.StatusBadRequest)
+			return
+		}
+		event := "queue_move_down"
+		delta := 1
+		if req.Direction < 0 {
+			event = "queue_move_up"
+			delta = -1
+		}
+		s.writeCommandState(w, r, event, room, user.Username, room.Playback.Move(req.ID, delta))
+	case "queue_next":
+		if !requireID(w, req.ID) {
+			return
+		}
+		s.writeCommandState(w, r, "queue_next", room, user.Username, room.Playback.MoveToNext(req.ID))
+	case "queue_clear":
+		s.writeCommandState(w, r, "queue_clear", room, user.Username, room.Playback.Clear())
+	case "play":
+		state, err := room.Playback.Play()
+		if err != nil {
+			slog.Warn("play rejected", "remote", r.RemoteAddr, "room", room.ID, "error", err)
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		s.writeCommandState(w, r, "play", room, user.Username, state)
+	case "play_now":
+		if req.TrackID <= 0 {
+			http.Error(w, "track_id is required", http.StatusBadRequest)
+			return
+		}
+		s.writeCommandState(w, r, "play_now", room, user.Username, room.Playback.PlayNow(req.TrackID, user.Username))
+	case "pause":
+		s.writeCommandState(w, r, "pause", room, user.Username, room.Playback.Pause())
+	case "previous":
+		s.writeCommandState(w, r, "previous", room, user.Username, room.Playback.Previous())
+	case "seek":
+		s.writeCommandState(w, r, "seek", room, user.Username, room.Playback.Seek(req.PositionMS))
+	case "skip":
+		s.writeCommandState(w, r, "skip", room, user.Username, room.Playback.Skip())
+	case "history_clear":
+		s.writeCommandState(w, r, "history_clear", room, user.Username, room.Playback.ClearHistory())
+	default:
+		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
-	return track, true
 }
 
-func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
+func requireID(w http.ResponseWriter, id int64) bool {
+	if id <= 0 {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return false
 	}
-	s.writeCommandState(w, r, "pause", room.Playback.Pause(), "room", room.ID)
-}
-
-func (s *Server) handlePrevious(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "previous", room.Playback.Previous(), "room", room.ID)
-}
-
-func (s *Server) handleSeek(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	var req struct {
-		PositionMS int64 `json:"position_ms"`
-	}
-	if !readJSON(w, r, &req) {
-		return
-	}
-	s.writeCommandState(w, r, "seek", room.Playback.Seek(req.PositionMS), "room", room.ID)
-}
-
-func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
-	room, ok := s.roomFromRequest(w, r)
-	if !ok {
-		return
-	}
-	s.writeCommandState(w, r, "skip", room.Playback.Skip(), "room", room.ID)
+	return true
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	s.logger.Info("library rescan started", "remote", r.RemoteAddr)
-	if err := s.library.Scan(r.Context()); err != nil {
+	slog.Info("library rescan started", "remote", r.RemoteAddr)
+	if err := s.Library.Scan(r.Context()); err != nil {
 		if errors.Is(err, musiclib.ErrScanInProgress) {
-			s.logger.Info("library rescan ignored; already scanning", "remote", r.RemoteAddr)
+			slog.Info("library rescan ignored; already scanning", "remote", r.RemoteAddr)
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		s.logger.Warn("library rescan failed", "remote", r.RemoteAddr, "duration", time.Since(started), "error", err)
+		slog.Warn("library rescan failed", "remote", r.RemoteAddr, "duration", time.Since(started), "error", err)
 		writeError(w, err)
 		return
 	}
-	count, err := s.library.Count(r.Context())
+	count, err := s.Library.Count(r.Context())
 	if err != nil {
-		s.logger.Warn("count library after rescan", "remote", r.RemoteAddr, "duration", time.Since(started), "error", err)
+		slog.Warn("count library after rescan", "remote", r.RemoteAddr, "duration", time.Since(started), "error", err)
 	} else {
-		s.logger.Info("library rescan completed", "remote", r.RemoteAddr, "duration", time.Since(started), "tracks", count)
+		slog.Info("library rescan completed", "remote", r.RemoteAddr, "duration", time.Since(started), "tracks", count)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimPrefix(r.URL.Path, "/media/")
-	id, err := strconv.ParseInt(raw, 10, 64)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		http.Error(w, "invalid media id", http.StatusBadRequest)
 		return
 	}
-	media, err := s.library.OpenMedia(r.Context(), id)
+	media, err := s.Library.OpenMedia(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, musiclib.ErrTrackNotFound) {
-			s.logger.Warn("media track not found", "remote", r.RemoteAddr, "track_id", id)
+			slog.Warn("media track not found", "remote", r.RemoteAddr, "track_id", id)
 			http.NotFound(w, r)
 			return
 		}
-		s.logger.Warn("load media track", "remote", r.RemoteAddr, "track_id", id, "error", err)
+		slog.Warn("load media track", "remote", r.RemoteAddr, "track_id", id, "error", err)
 		writeError(w, err)
 		return
 	}
@@ -626,13 +451,13 @@ func (s *Server) handleArtwork(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid media id", http.StatusBadRequest)
 		return
 	}
-	data, mimeType, err := s.library.Artwork(r.Context(), id)
+	data, mimeType, err := s.Library.Artwork(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, musiclib.ErrTrackNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		s.logger.Warn("load media artwork", "remote", r.RemoteAddr, "track_id", id, "error", err)
+		slog.Warn("load media artwork", "remote", r.RemoteAddr, "track_id", id, "error", err)
 		writeError(w, err)
 		return
 	}
@@ -641,108 +466,38 @@ func (s *Server) handleArtwork(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *Server) writeViewState(w http.ResponseWriter, r *http.Request, state PlaybackState) {
+func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event string, room *Room, username string, state PlaybackState) {
 	view, err := s.viewState(r.Context(), state)
 	if err != nil {
-		s.logger.Warn("build view state", "remote", r.RemoteAddr, "error", err)
+		slog.Warn("build view state", "remote", r.RemoteAddr, "error", err)
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, view)
-}
-
-func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event string, state PlaybackState, args ...any) {
-	view, err := s.viewState(r.Context(), state)
-	if err != nil {
-		s.logger.Warn("build view state", "remote", r.RemoteAddr, "error", err)
-		writeError(w, err)
-		return
-	}
-	s.logPlayback(event, r, view, args...)
-	writeJSON(w, view)
-}
-
-func (s *Server) logPlayback(event string, r *http.Request, view ViewState, args ...any) {
-	fields := append([]any{
+	slog.Info("playback action",
 		"action", event,
-		"username", s.actorUsername(r),
-		"ip", remoteIP(r.RemoteAddr),
-	}, args...)
-	if !hasLogKey(fields, "song_title") && logCurrentSong(event) && view.Current != nil {
-		fields = append(fields, "song_title", view.Current.Title)
-	}
-	s.logger.Info("playback action", fields...)
-}
-
-func (s *Server) logQueueItemTrack(r *http.Request, room *Room, queueItemID int64) []any {
-	for _, item := range room.Playback.Snapshot().Queue {
-		if item.ID != queueItemID {
-			continue
-		}
-		track, err := s.library.Get(r.Context(), item.TrackID)
-		if err != nil {
-			s.logger.Warn("lookup queue item for log", "ip", remoteIP(r.RemoteAddr), "queue_item_id", queueItemID, "track_id", item.TrackID, "error", err)
-			return nil
-		}
-		return logTrack(track)
-	}
-	return nil
-}
-
-func logTrack(track musiclib.Track) []any {
-	if track.Title == "" {
-		return nil
-	}
-	return []any{"song_title", track.Title}
-}
-
-func logCurrentSong(event string) bool {
-	switch event {
-	case "play", "pause", "previous", "seek", "skip":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasLogKey(fields []any, key string) bool {
-	for i := 0; i+1 < len(fields); i += 2 {
-		if fields[i] == key {
-			return true
-		}
-	}
-	return false
-}
-
-func remoteIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return remoteAddr
-	}
-	return host
+		"username", username,
+		"remote", r.RemoteAddr,
+		"room", room.ID,
+	)
+	writeJSON(w, view)
 }
 
 type ViewState struct {
 	PlaybackState
-	Current *musiclib.Track   `json:"current"`
-	Queue   []ViewQueueItem   `json:"queue"`
-	History []ViewHistoryItem `json:"history"`
+	Current *ViewItem  `json:"current"`
+	Queue   []ViewItem `json:"queue"`
+	History []ViewItem `json:"history"`
 }
 
-type ViewQueueItem struct {
-	QueueItem
-	Track *musiclib.Track `json:"track"`
-}
-
-type ViewHistoryItem struct {
-	PlayedItem
+type ViewItem struct {
+	PlaybackItem
 	Track *musiclib.Track `json:"track"`
 }
 
 func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState, error) {
 	ids := make([]int64, 0, len(state.Queue)+len(state.History)+1)
-	if state.CurrentTrackID != 0 {
-		ids = append(ids, state.CurrentTrackID)
+	if state.Current.TrackID != 0 {
+		ids = append(ids, state.Current.TrackID)
 	}
 	for _, item := range state.Queue {
 		ids = append(ids, item.TrackID)
@@ -750,25 +505,28 @@ func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState,
 	for _, item := range state.History {
 		ids = append(ids, item.TrackID)
 	}
-	tracks, err := s.library.ListByIDs(ctx, ids)
+	tracks, err := s.Library.ListByIDs(ctx, ids)
 	if err != nil {
 		return ViewState{}, err
 	}
 	view := ViewState{PlaybackState: state}
-	view.Queue = make([]ViewQueueItem, 0, len(state.Queue))
-	view.History = make([]ViewHistoryItem, 0, len(state.History))
-	if track, ok := tracks[state.CurrentTrackID]; ok {
-		view.Current = &track
+	view.Queue = make([]ViewItem, 0, len(state.Queue))
+	view.History = make([]ViewItem, 0, len(state.History))
+	if state.Current.TrackID != 0 {
+		view.Current = &ViewItem{PlaybackItem: state.Current}
+		if track, ok := tracks[state.Current.TrackID]; ok {
+			view.Current.Track = &track
+		}
 	}
 	for _, item := range state.Queue {
-		viewItem := ViewQueueItem{QueueItem: item}
+		viewItem := ViewItem{PlaybackItem: item}
 		if track, ok := tracks[item.TrackID]; ok {
 			viewItem.Track = &track
 		}
 		view.Queue = append(view.Queue, viewItem)
 	}
 	for _, item := range state.History {
-		viewItem := ViewHistoryItem{PlayedItem: item}
+		viewItem := ViewItem{PlaybackItem: item}
 		if track, ok := tracks[item.TrackID]; ok {
 			viewItem.Track = &track
 		}
@@ -790,20 +548,6 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
-}
-
-func readID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	var req struct {
-		ID int64 `json:"id"`
-	}
-	if !readJSON(w, r, &req) {
-		return 0, false
-	}
-	if req.ID <= 0 {
-		http.Error(w, "id is required", http.StatusBadRequest)
-		return 0, false
-	}
-	return req.ID, true
 }
 
 func writeError(w http.ResponseWriter, err error) {

@@ -130,8 +130,8 @@ if (location.pathname === "/login/oauth/callback") {
 </html>`))
 
 type Config struct {
-	DataDir             string     `json:"data_dir"`
-	BootstrapAdminEmail string     `json:"bootstrap_admin_email"`
+	DataDir             string     `json:"-"`
+	BootstrapAdminEmail string     `json:"-"`
 	Keycloak            OIDCConfig `json:"keycloak"`
 }
 
@@ -276,6 +276,10 @@ func bindSessionCookie(app core.App) {
 
 func DataDir(configDir string) string {
 	return filepath.Join(configDir, "auth")
+}
+
+func DefaultBootstrapAdminEmail() string {
+	return defaultAdminEmail
 }
 
 func DefaultConfig(configDir string) Config {

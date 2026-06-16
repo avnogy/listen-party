@@ -21,13 +21,13 @@ type RoomManager struct {
 	defaultID string
 }
 
-func NewRoomManager(configs []RoomConfig) *RoomManager {
+func NewRoomManager(configs []Room) *RoomManager {
 	m := &RoomManager{}
 	m.Update(configs)
 	return m
 }
 
-func (m *RoomManager) Update(configs []RoomConfig) {
+func (m *RoomManager) Update(configs []Room) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

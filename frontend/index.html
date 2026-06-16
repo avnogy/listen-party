@@ -66,8 +66,8 @@
           <p id="artist"></p>
         </div>
         <div class="player-controls">
+          <img id="artwork" class="player-artwork" alt="" hidden>
           <div class="transport-controls">
-            <img id="artwork" class="player-artwork" alt="" hidden>
             <button id="previous" class="icon-button" disabled title="Previous" aria-label="Previous track">
               <span class="previous-icon" aria-hidden="true"></span>
             </button>
@@ -96,7 +96,7 @@
                 <path d="m22 9-5 5"></path>
               </svg>
             </button>
-            <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+            <input id="volume" type="range" min="0" max="0.5" step="0.01" value="0" aria-label="Volume">
           </div>
           <audio id="audio" preload="metadata"></audio>
         </div>

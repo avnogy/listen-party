@@ -18,12 +18,12 @@ type AuthConfig struct {
 }
 
 type Config struct {
-	Addr         string       `json:"addr"`
-	MusicDirs    []string     `json:"music_dirs"`
-	DatabasePath string       `json:"database_path"`
-	ScanWorkers  int          `json:"scan_workers"`
-	Rooms        []RoomConfig `json:"rooms"`
-	Auth         AuthConfig   `json:"auth"`
+	Addr         string     `json:"addr"`
+	MusicDirs    []string   `json:"music_dirs"`
+	DatabasePath string     `json:"-"`
+	ScanWorkers  int        `json:"scan_workers"`
+	Rooms        []Room     `json:"rooms"`
+	Auth         AuthConfig `json:"auth"`
 }
 
 const (
@@ -33,14 +33,6 @@ const (
 )
 
 var roomIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-
-type RoomConfig struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Public        bool     `json:"public"`
-	AllowedRoles  []string `json:"allowed_roles,omitempty"`
-	AllowedGroups []string `json:"allowed_groups,omitempty"`
-}
 
 func DefaultConfigDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -70,7 +62,7 @@ func DefaultDatabasePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "listen-party.sqlite"), nil
+	return databasePath(dir), nil
 }
 
 func DefaultMusicDir() (string, error) {
@@ -100,7 +92,7 @@ func LoadConfig(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if err := cfg.ApplyDefaults(); err != nil {
+	if err := cfg.ApplyDefaultsForRoot(filepath.Dir(path)); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -117,7 +109,7 @@ func SaveConfig(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if err := cfg.ApplyDefaults(); err != nil {
+	if err := cfg.ApplyDefaultsForRoot(filepath.Dir(path)); err != nil {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -138,10 +130,7 @@ func SaveConfig(path string, cfg Config) error {
 }
 
 func createDefaultConfig(path string) (Config, error) {
-	cfg, err := NewDefaultConfig()
-	if err != nil {
-		return Config{}, err
-	}
+	cfg := NewDefaultConfigForRoot(filepath.Dir(path))
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -167,24 +156,20 @@ func NewDefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dbPath, err := DefaultDatabasePath()
-	if err != nil {
-		return Config{}, err
-	}
-	musicDir, err := DefaultMusicDir()
-	if err != nil {
-		return Config{}, err
-	}
+	return NewDefaultConfigForRoot(configDir), nil
+}
+
+func NewDefaultConfigForRoot(configDir string) Config {
 	return Config{
 		Addr:         "0.0.0.0:8080",
-		MusicDirs:    []string{musicDir},
-		DatabasePath: dbPath,
+		MusicDirs:    []string{filepath.Join(configDir, "music")},
+		DatabasePath: databasePath(configDir),
 		ScanWorkers:  defaultScanWorkers,
-		Rooms:        []RoomConfig{{ID: defaultRoomID, Name: "Public Room", Public: true}},
+		Rooms:        []Room{{ID: defaultRoomID, Name: "Public Room", Public: true}},
 		Auth: AuthConfig{
 			PocketBase: appauth.DefaultConfig(configDir),
 		},
-	}, nil
+	}
 }
 
 func (c Config) Validate() error {
@@ -202,9 +187,6 @@ func (c Config) Validate() error {
 			return errors.New("music_dirs must not contain empty paths")
 		}
 	}
-	if c.Auth.PocketBase.DataDir == "" {
-		return errors.New("auth.pocketbase.data_dir is required")
-	}
 	if len(c.Rooms) > 0 {
 		if err := validateRooms(c.Rooms); err != nil {
 			return err
@@ -214,21 +196,30 @@ func (c Config) Validate() error {
 }
 
 func (c *Config) ApplyDefaults() error {
-	if c.Addr == "" {
-		c.Addr = "0.0.0.0:8080"
+	configDir, err := DefaultConfigDir()
+	if err != nil {
+		return err
 	}
-	if c.DatabasePath == "" {
-		dbPath, err := DefaultDatabasePath()
+	return c.ApplyDefaultsForRoot(configDir)
+}
+
+func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
+	if configRoot == "" {
+		var err error
+		configRoot, err = DefaultConfigDir()
 		if err != nil {
 			return err
 		}
-		c.DatabasePath = dbPath
 	}
+	if c.Addr == "" {
+		c.Addr = "0.0.0.0:8080"
+	}
+	c.DatabasePath = databasePath(configRoot)
 	if c.ScanWorkers == 0 {
 		c.ScanWorkers = defaultScanWorkers
 	}
 	if len(c.Rooms) == 0 {
-		c.Rooms = []RoomConfig{{ID: defaultRoomID, Name: "Public Room", Public: true}}
+		c.Rooms = []Room{{ID: defaultRoomID, Name: "Public Room", Public: true}}
 	}
 	for i := range c.Rooms {
 		c.Rooms[i].ID = strings.TrimSpace(c.Rooms[i].ID)
@@ -242,17 +233,16 @@ func (c *Config) ApplyDefaults() error {
 		c.Rooms[i].AllowedRoles = normalizeConfigList(c.Rooms[i].AllowedRoles)
 		c.Rooms[i].AllowedGroups = normalizeConfigList(c.Rooms[i].AllowedGroups)
 	}
-	if c.Auth.PocketBase.DataDir == "" {
-		configDir, err := DefaultConfigDir()
-		if err != nil {
-			return err
-		}
-		c.Auth.PocketBase = appauth.DefaultConfig(configDir)
-	}
+	c.Auth.PocketBase.DataDir = appauth.DataDir(configRoot)
+	c.Auth.PocketBase.BootstrapAdminEmail = appauth.DefaultBootstrapAdminEmail()
 	return nil
 }
 
-func validateRooms(rooms []RoomConfig) error {
+func databasePath(configRoot string) string {
+	return filepath.Join(configRoot, "listen-party.sqlite")
+}
+
+func validateRooms(rooms []Room) error {
 	if len(rooms) == 0 {
 		return errors.New("rooms must contain at least one room")
 	}
