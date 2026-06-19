@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -44,6 +45,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /rooms/{room}/api/state", requireListener(http.HandlerFunc(s.handleState)))
 	mux.Handle("GET /api/search", requireListener(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /api/library", requireListener(http.HandlerFunc(s.handleLibrary)))
+	mux.Handle("GET /api/playlists", requireListener(http.HandlerFunc(s.handlePlaylists)))
+	mux.Handle("POST /api/playlists", requireListener(http.HandlerFunc(s.handlePlaylistCreate)))
+	mux.Handle("GET /api/playlists/{id}", requireListener(http.HandlerFunc(s.handlePlaylist)))
+	mux.Handle("PATCH /api/playlists/{id}", requireListener(http.HandlerFunc(s.handlePlaylistUpdate)))
+	mux.Handle("POST /api/playlists/{id}/items", requireListener(http.HandlerFunc(s.handlePlaylistAddItem)))
+	mux.Handle("DELETE /api/playlists/{id}/items/{item}", requireListener(http.HandlerFunc(s.handlePlaylistRemoveItem)))
 	mux.Handle("POST /rooms/{room}/api/command", requireListener(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/admin/rescan", requireAdmin(http.HandlerFunc(s.handleRescan)))
 	mux.Handle("POST /api/admin/rescan-dir", requireAdmin(http.HandlerFunc(s.handleRescanDir)))
@@ -282,8 +289,9 @@ func (s *Server) playbackExpired(ctx context.Context, state PlaybackState) bool 
 	if s.Library == nil || state.Current.TrackID == 0 || state.Paused || state.StartedAt.IsZero() {
 		return false
 	}
-	track, err := s.Library.Get(ctx, state.Current.TrackID)
+	track, err := s.Library.GetCached(ctx, state.Current.TrackID)
 	if err != nil || track.DurationMS <= 0 {
+		s.Library.EnsureDuration(state.Current.TrackID)
 		return false
 	}
 	return time.Since(state.StartedAt).Milliseconds() > track.DurationMS+1500
@@ -309,6 +317,201 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		"track_count": count,
 		"scan":        s.Library.ScanStatus(),
 	})
+}
+
+type playlistView struct {
+	musiclib.Playlist
+	CanEdit bool `json:"can_edit"`
+	CanRun  bool `json:"can_run"`
+}
+
+func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	playlists, err := s.Library.ListPlaylists(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]playlistView, 0, len(playlists))
+	for _, playlist := range playlists {
+		if !userCanViewPlaylist(user, playlist) {
+			continue
+		}
+		out = append(out, s.playlistView(user, playlist))
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !userCanViewPlaylist(user, playlist) {
+		http.Error(w, "playlist access denied", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, s.playlistView(user, playlist))
+}
+
+func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Name   string `json:"name"`
+		Public bool   `json:"public"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	playlist, err := s.Library.CreatePlaylist(r.Context(), req.Name, user.ID, req.Public)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, s.playlistView(user, playlist))
+}
+
+func (s *Server) handlePlaylistUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !userCanEditPlaylist(user, playlist) {
+		http.Error(w, "playlist edit denied", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Public bool `json:"public"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	playlist, err = s.Library.UpdatePlaylistVisibility(r.Context(), id, req.Public)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, s.playlistView(user, playlist))
+}
+
+func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !userCanEditPlaylist(user, playlist) {
+		http.Error(w, "playlist edit denied", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		TrackID int64 `json:"track_id"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.TrackID <= 0 {
+		http.Error(w, "track_id is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.Library.AddPlaylistTrack(r.Context(), id, req.TrackID); err != nil {
+		writeError(w, err)
+		return
+	}
+	playlist, err = s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, s.playlistView(user, playlist))
+}
+
+func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.Auth.CurrentUser(r)
+	if !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	itemID, ok := pathID(w, r, "item")
+	if !ok {
+		return
+	}
+	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !userCanEditPlaylist(user, playlist) {
+		http.Error(w, "playlist edit denied", http.StatusForbidden)
+		return
+	}
+	if err := s.Library.RemovePlaylistItem(r.Context(), id, itemID); err != nil {
+		writeError(w, err)
+		return
+	}
+	playlist, err = s.Library.GetPlaylist(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, s.playlistView(user, playlist))
+}
+
+func (s *Server) playlistView(user UserInfo, playlist musiclib.Playlist) playlistView {
+	return playlistView{
+		Playlist: playlist,
+		CanEdit:  userCanEditPlaylist(user, playlist),
+		CanRun:   userCanViewPlaylist(user, playlist),
+	}
+}
+
+func userCanViewPlaylist(user UserInfo, playlist musiclib.Playlist) bool {
+	return user.Role == RoleAdmin || playlist.Public || playlist.OwnerID == user.ID
+}
+
+func userCanEditPlaylist(user UserInfo, playlist musiclib.Playlist) bool {
+	return user.Role == RoleAdmin || playlist.OwnerID == user.ID
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +569,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action     string `json:"action"`
 		TrackID    int64  `json:"track_id"`
+		PlaylistID int64  `json:"playlist_id"`
 		ID         int64  `json:"id"`
 		Direction  int    `json:"direction"`
 		PositionMS int64  `json:"position_ms"`
@@ -431,6 +635,35 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		s.writeCommandState(w, r, "skip", room, user.Username, room.Playback.Skip())
 	case "history_clear":
 		s.writeCommandState(w, r, "history_clear", room, user.Username, room.Playback.ClearHistory())
+	case "playlist_queue", "playlist_shuffle":
+		if req.PlaylistID <= 0 {
+			http.Error(w, "playlist_id is required", http.StatusBadRequest)
+			return
+		}
+		playlist, err := s.Library.GetPlaylist(r.Context(), req.PlaylistID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !userCanViewPlaylist(user, playlist) {
+			http.Error(w, "playlist access denied", http.StatusForbidden)
+			return
+		}
+		tracks, err := s.Library.ResolvePlaylistTracks(r.Context(), req.PlaylistID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		ids := make([]int64, 0, len(tracks))
+		for _, track := range tracks {
+			ids = append(ids, track.ID)
+		}
+		if req.Action == "playlist_shuffle" {
+			rand.Shuffle(len(ids), func(i, j int) {
+				ids[i], ids[j] = ids[j], ids[i]
+			})
+		}
+		s.writeCommandState(w, r, req.Action, room, user.Username, room.Playback.AddMany(ids, user.Username))
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
@@ -442,6 +675,15 @@ func requireID(w http.ResponseWriter, id int64) bool {
 		return false
 	}
 	return true
+}
+
+func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
 }
 
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	musiclib "listen-party/internal/library"
 )
 
 func TestAdminPageRequiresAdminCredentials(t *testing.T) {
@@ -154,6 +158,42 @@ func TestQueueMoveRequiresDirection(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("/queue/move status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPlaylistListFiltersPrivatePlaylists(t *testing.T) {
+	ctx := context.Background()
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{t.TempDir()}, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	if _, err := lib.CreatePlaylist(ctx, "Public", "owner1", true); err != nil {
+		t.Fatalf("create public playlist: %v", err)
+	}
+	if _, err := lib.CreatePlaylist(ctx, "Private", "owner1", false); err != nil {
+		t.Fatalf("create private playlist: %v", err)
+	}
+
+	server := testServer(&Server{
+		Auth: fakeAuth{
+			roles: []Role{RoleListener},
+			user:  UserInfo{ID: "other", Username: "bob", Role: RoleListener},
+		},
+		Library: lib,
+	}).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/api/playlists", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/playlists status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"name":"Public"`) {
+		t.Fatalf("/api/playlists body = %s, missing public playlist", body)
+	}
+	if strings.Contains(body, `"name":"Private"`) {
+		t.Fatalf("/api/playlists leaked private playlist: %s", body)
 	}
 }
 

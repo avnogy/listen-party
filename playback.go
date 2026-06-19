@@ -59,6 +59,22 @@ func (p *Playback) Add(trackID int64, requestedBy string) PlaybackState {
 	return p.stateLocked()
 }
 
+func (p *Playback) AddMany(trackIDs []int64, requestedBy string) PlaybackState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	for _, trackID := range trackIDs {
+		if trackID <= 0 {
+			continue
+		}
+		p.nextID++
+		p.queue = append(p.queue, PlaybackItem{ID: p.nextID, TrackID: trackID, At: now, RequestedBy: requestedBy})
+	}
+	p.bumpLocked()
+	return p.stateLocked()
+}
+
 func (p *Playback) Play() (PlaybackState, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -29,7 +29,31 @@ type Track struct {
 	DurationMS int64     `json:"duration_ms"`
 	Size       int64     `json:"size"`
 	ModTime    time.Time `json:"mod_time"`
+	DedupeKey  string    `json:"dedupe_key"`
+	MatchKey   string    `json:"match_key"`
 	Available  bool      `json:"available"`
+}
+
+type Playlist struct {
+	ID        int64          `json:"id"`
+	Name      string         `json:"name"`
+	OwnerID   string         `json:"owner_id"`
+	Public    bool           `json:"public"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Items     []PlaylistItem `json:"items,omitempty"`
+}
+
+type PlaylistItem struct {
+	ID         int64  `json:"id"`
+	PlaylistID int64  `json:"playlist_id"`
+	Position   int    `json:"position"`
+	DedupeKey  string `json:"dedupe_key"`
+	MatchKey   string `json:"match_key"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Album      string `json:"album"`
+	TrackID    int64  `json:"track_id,omitempty"`
 }
 
 type Media struct {
@@ -58,13 +82,14 @@ func (m *Media) ModTime() time.Time {
 }
 
 type Library struct {
-	mu       sync.RWMutex
-	scanMu   sync.Mutex
-	statusMu sync.RWMutex
-	db       *sql.DB
-	dirs     []string
-	workers  int
-	status   ScanStatus
+	mu              sync.RWMutex
+	scanMu          sync.Mutex
+	statusMu        sync.RWMutex
+	durationLoading sync.Map
+	db              *sql.DB
+	dirs            []string
+	workers         int
+	status          ScanStatus
 }
 
 type ScanStatus struct {
@@ -102,6 +127,8 @@ const (
 	scanMaxWorkers         = 256
 	scanProgressLogEvery   = 5 * time.Second
 )
+
+const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available`
 
 func Open(ctx context.Context, path string, dirs []string, workers int) (*Library, error) {
 	db, err := openDB(path)
@@ -175,6 +202,8 @@ CREATE TABLE IF NOT EXISTS tracks (
 	duration_ms INTEGER NOT NULL DEFAULT 0,
 	size INTEGER NOT NULL,
 	mod_time INTEGER NOT NULL,
+	dedupe_key TEXT NOT NULL DEFAULT '',
+	match_key TEXT NOT NULL DEFAULT '',
 	available INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS tracks_available_idx ON tracks(available);
@@ -196,14 +225,118 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
 	INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album) VALUES ('delete', old.id, old.title, old.artist, old.album);
 	INSERT INTO tracks_fts(rowid, title, artist, album) VALUES (new.id, new.title, new.artist, new.album);
 END;
+CREATE TABLE IF NOT EXISTS playlists (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	owner_id TEXT NOT NULL,
+	public INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS playlist_items (
+	id INTEGER PRIMARY KEY,
+	playlist_id INTEGER NOT NULL,
+	position INTEGER NOT NULL,
+	dedupe_key TEXT NOT NULL,
+	match_key TEXT NOT NULL,
+	title TEXT NOT NULL,
+	artist TEXT NOT NULL,
+	album TEXT NOT NULL,
+	FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items(playlist_id, position);
 `)
 	if err != nil {
+		return err
+	}
+	if err := l.ensureTrackKeyColumns(ctx); err != nil {
+		return err
+	}
+	if _, err := l.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tracks_dedupe_idx ON tracks(dedupe_key, available)`); err != nil {
 		return err
 	}
 	if !ftsExists {
 		_, err = l.db.ExecContext(ctx, `INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')`)
 	}
 	return err
+}
+
+func (l *Library) ensureTrackKeyColumns(ctx context.Context) error {
+	rows, err := l.db.QueryContext(ctx, `PRAGMA table_info(tracks)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		columns[columnName] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !columns["dedupe_key"] {
+		if _, err := l.db.ExecContext(ctx, `ALTER TABLE tracks ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !columns["match_key"] {
+		if _, err := l.db.ExecContext(ctx, `ALTER TABLE tracks ADD COLUMN match_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return l.backfillTrackKeys(ctx)
+}
+
+func (l *Library) backfillTrackKeys(ctx context.Context) error {
+	rows, err := l.db.QueryContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE dedupe_key = '' OR match_key = ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var tracks []Track
+	for rows.Next() {
+		t, err := scanTrack(rows)
+		if err != nil {
+			return err
+		}
+		setTrackKeys(&t)
+		tracks = append(tracks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+	stmt, err := tx.PrepareContext(ctx, `UPDATE tracks SET dedupe_key = ?, match_key = ? WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, t := range tracks {
+		if _, err := stmt.ExecContext(ctx, t.DedupeKey, t.MatchKey, t.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (l *Library) trackSchemaNeedsReset(ctx context.Context) (bool, error) {
@@ -290,8 +423,8 @@ func pathInRoot(path string, root string) bool {
 }
 
 const upsertTrackSQL = `
-INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, available)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, 1)
+INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT(path) DO UPDATE SET
 	title = excluded.title,
 	artist = excluded.artist,
@@ -300,6 +433,8 @@ ON CONFLICT(path) DO UPDATE SET
 	duration_ms = excluded.duration_ms,
 	size = excluded.size,
 	mod_time = excluded.mod_time,
+	dedupe_key = excluded.dedupe_key,
+	match_key = excluded.match_key,
 	available = 1
 `
 
@@ -329,7 +464,8 @@ func (l *Library) flushTracks(ctx context.Context, tracks []Track) error {
 		if t.Title == "" {
 			t.Title = fallbackTitle(t.path)
 		}
-		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix()); err != nil {
+		setTrackKeys(&t)
+		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix(), t.DedupeKey, t.MatchKey); err != nil {
 			return err
 		}
 	}
@@ -451,11 +587,16 @@ func (l *Library) SearchField(ctx context.Context, q string, field string) ([]Tr
 		return l.recent(ctx, limit)
 	}
 	rows, err := l.db.QueryContext(ctx, `
-SELECT tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.track_no, tracks.duration_ms, tracks.size, tracks.mod_time, tracks.available
-FROM tracks
-JOIN tracks_fts ON tracks_fts.rowid = tracks.id
-WHERE tracks.available = 1 AND tracks_fts MATCH ?
-ORDER BY tracks.title COLLATE NOCASE ASC, tracks.artist COLLATE NOCASE ASC, tracks.album COLLATE NOCASE ASC, tracks.track_no ASC
+SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available
+FROM (
+	SELECT tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.track_no, tracks.duration_ms, tracks.size, tracks.mod_time, tracks.dedupe_key, tracks.match_key, tracks.available,
+		row_number() OVER (PARTITION BY tracks.dedupe_key ORDER BY tracks.path ASC) AS rn
+	FROM tracks
+	JOIN tracks_fts ON tracks_fts.rowid = tracks.id
+	WHERE tracks.available = 1 AND tracks_fts MATCH ?
+)
+WHERE rn = 1
+ORDER BY title COLLATE NOCASE ASC, artist COLLATE NOCASE ASC, album COLLATE NOCASE ASC, track_no ASC
 LIMIT ?`, query, limit)
 	if err != nil {
 		return nil, err
@@ -488,9 +629,14 @@ func searchFTSQuery(q string, field string) string {
 func (l *Library) recent(ctx context.Context, limit int) ([]Track, error) {
 	limit = clampTrackQueryLimit(limit)
 	rows, err := l.db.QueryContext(ctx, `
-SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, available
-FROM tracks
-WHERE available = 1
+SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available
+FROM (
+	SELECT `+trackSelectColumns+`,
+		row_number() OVER (PARTITION BY dedupe_key ORDER BY path ASC) AS rn
+	FROM tracks
+	WHERE available = 1
+)
+WHERE rn = 1
 ORDER BY mod_time DESC, title
 LIMIT ?`, limit)
 	if err != nil {
@@ -517,8 +663,16 @@ func (l *Library) Count(ctx context.Context) (int64, error) {
 }
 
 func (l *Library) Get(ctx context.Context, id int64) (Track, error) {
+	return l.get(ctx, id, true)
+}
+
+func (l *Library) GetCached(ctx context.Context, id int64) (Track, error) {
+	return l.get(ctx, id, false)
+}
+
+func (l *Library) get(ctx context.Context, id int64, fillDuration bool) (Track, error) {
 	row := l.db.QueryRowContext(ctx, `
-SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, available
+SELECT `+trackSelectColumns+`
 FROM tracks
 WHERE id = ? AND available = 1`, id)
 	track, err := scanTrack(row)
@@ -528,7 +682,7 @@ WHERE id = ? AND available = 1`, id)
 	if err != nil {
 		return Track{}, err
 	}
-	if track.DurationMS == 0 {
+	if fillDuration && track.DurationMS == 0 {
 		track.DurationMS = mp3DurationMS(track.path)
 		if track.DurationMS > 0 {
 			_, _ = l.db.ExecContext(ctx, `UPDATE tracks SET duration_ms = ? WHERE id = ?`, track.DurationMS, id)
@@ -537,10 +691,23 @@ WHERE id = ? AND available = 1`, id)
 	return track, nil
 }
 
+func (l *Library) EnsureDuration(id int64) {
+	if id <= 0 {
+		return
+	}
+	if _, loaded := l.durationLoading.LoadOrStore(id, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer l.durationLoading.Delete(id)
+		_, _ = l.Get(context.Background(), id)
+	}()
+}
+
 func (l *Library) ListByIDs(ctx context.Context, ids []int64) (map[int64]Track, error) {
 	out := make(map[int64]Track, len(ids))
 	for _, id := range ids {
-		t, err := l.Get(ctx, id)
+		t, err := l.get(ctx, id, false)
 		if err != nil {
 			if errors.Is(err, ErrTrackNotFound) {
 				continue
@@ -553,7 +720,7 @@ func (l *Library) ListByIDs(ctx context.Context, ids []int64) (map[int64]Track, 
 }
 
 func (l *Library) OpenMedia(ctx context.Context, id int64) (*Media, error) {
-	track, err := l.Get(ctx, id)
+	track, err := l.get(ctx, id, false)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +732,7 @@ func (l *Library) OpenMedia(ctx context.Context, id int64) (*Media, error) {
 }
 
 func (l *Library) Artwork(ctx context.Context, id int64) ([]byte, string, error) {
-	track, err := l.Get(ctx, id)
+	track, err := l.get(ctx, id, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -590,6 +757,171 @@ func (l *Library) Artwork(ctx context.Context, id int64) ([]byte, string, error)
 	return picture.Data, mimeType, nil
 }
 
+func (l *Library) CreatePlaylist(ctx context.Context, name, ownerID string, public bool) (Playlist, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Playlist{}, errors.New("playlist name is required")
+	}
+	now := time.Now()
+	res, err := l.db.ExecContext(ctx, `INSERT INTO playlists(name, owner_id, public, created_at, updated_at) VALUES(?, ?, ?, ?, ?)`, name, ownerID, boolInt(public), now.Unix(), now.Unix())
+	if err != nil {
+		return Playlist{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Playlist{}, err
+	}
+	return Playlist{ID: id, Name: name, OwnerID: ownerID, Public: public, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+func (l *Library) ListPlaylists(ctx context.Context) ([]Playlist, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT id, name, owner_id, public, created_at, updated_at FROM playlists ORDER BY name COLLATE NOCASE ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var playlists []Playlist
+	for rows.Next() {
+		p, err := scanPlaylist(rows)
+		if err != nil {
+			return nil, err
+		}
+		playlists = append(playlists, p)
+	}
+	return playlists, rows.Err()
+}
+
+func (l *Library) GetPlaylist(ctx context.Context, id int64) (Playlist, error) {
+	row := l.db.QueryRowContext(ctx, `SELECT id, name, owner_id, public, created_at, updated_at FROM playlists WHERE id = ?`, id)
+	p, err := scanPlaylist(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Playlist{}, ErrTrackNotFound
+	}
+	if err != nil {
+		return Playlist{}, err
+	}
+	items, err := l.PlaylistItems(ctx, id)
+	if err != nil {
+		return Playlist{}, err
+	}
+	p.Items = items
+	return p, nil
+}
+
+func (l *Library) UpdatePlaylistVisibility(ctx context.Context, id int64, public bool) (Playlist, error) {
+	res, err := l.db.ExecContext(ctx, `UPDATE playlists SET public = ?, updated_at = ? WHERE id = ?`, boolInt(public), time.Now().Unix(), id)
+	if err != nil {
+		return Playlist{}, err
+	}
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return Playlist{}, err
+	}
+	if updated == 0 {
+		return Playlist{}, ErrTrackNotFound
+	}
+	return l.GetPlaylist(ctx, id)
+}
+
+func (l *Library) PlaylistItems(ctx context.Context, playlistID int64) ([]PlaylistItem, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT id, playlist_id, position, dedupe_key, match_key, title, artist, album FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC, id ASC`, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlaylistItem
+	for rows.Next() {
+		item, err := scanPlaylistItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID, trackID int64) (PlaylistItem, error) {
+	track, err := l.get(ctx, trackID, false)
+	if err != nil {
+		return PlaylistItem{}, err
+	}
+	var position int
+	if err := l.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) + 1 FROM playlist_items WHERE playlist_id = ?`, playlistID).Scan(&position); err != nil {
+		return PlaylistItem{}, err
+	}
+	res, err := l.db.ExecContext(ctx, `INSERT INTO playlist_items(playlist_id, position, dedupe_key, match_key, title, artist, album) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		playlistID, position, track.DedupeKey, track.MatchKey, track.Title, track.Artist, track.Album)
+	if err != nil {
+		return PlaylistItem{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return PlaylistItem{}, err
+	}
+	return PlaylistItem{ID: id, PlaylistID: playlistID, Position: position, DedupeKey: track.DedupeKey, MatchKey: track.MatchKey, Title: track.Title, Artist: track.Artist, Album: track.Album, TrackID: track.ID}, nil
+}
+
+func (l *Library) RemovePlaylistItem(ctx context.Context, playlistID, itemID int64) error {
+	_, err := l.db.ExecContext(ctx, `DELETE FROM playlist_items WHERE playlist_id = ? AND id = ?`, playlistID, itemID)
+	return err
+}
+
+func (l *Library) ResolvePlaylistTracks(ctx context.Context, playlistID int64) ([]Track, error) {
+	items, err := l.PlaylistItems(ctx, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	tracks := make([]Track, 0, len(items))
+	for _, item := range items {
+		track, err := l.ResolveDedupeKey(ctx, item.DedupeKey)
+		if err != nil {
+			if errors.Is(err, ErrTrackNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		tracks = append(tracks, track)
+	}
+	return tracks, nil
+}
+
+func (l *Library) ResolveDedupeKey(ctx context.Context, key string) (Track, error) {
+	row := l.db.QueryRowContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE available = 1 AND dedupe_key = ? ORDER BY path ASC LIMIT 1`, key)
+	track, err := scanTrack(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Track{}, ErrTrackNotFound
+	}
+	return track, err
+}
+
+func scanPlaylist(row rowScanner) (Playlist, error) {
+	var p Playlist
+	var public int
+	var created, updated int64
+	if err := row.Scan(&p.ID, &p.Name, &p.OwnerID, &public, &created, &updated); err != nil {
+		return Playlist{}, err
+	}
+	p.Public = public == 1
+	p.CreatedAt = time.Unix(created, 0)
+	p.UpdatedAt = time.Unix(updated, 0)
+	return p, nil
+}
+
+func scanPlaylistItem(row rowScanner) (PlaylistItem, error) {
+	var item PlaylistItem
+	if err := row.Scan(&item.ID, &item.PlaylistID, &item.Position, &item.DedupeKey, &item.MatchKey, &item.Title, &item.Artist, &item.Album); err != nil {
+		return PlaylistItem{}, err
+	}
+	return item, nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -598,12 +930,13 @@ func scanTrack(row rowScanner) (Track, error) {
 	var t Track
 	var unix int64
 	var available int
-	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &available); err != nil {
+	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &t.DedupeKey, &t.MatchKey, &available); err != nil {
 		return Track{}, err
 	}
 	t.ModTime = time.Unix(unix, 0)
 	t.Available = available == 1
 	normalizeTrackDisplay(&t)
+	setTrackKeys(&t)
 	return t, nil
 }
 
@@ -907,12 +1240,11 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 
 	title, artist := filenameFallback(path)
 	t := Track{
-		path:       path,
-		Title:      title,
-		Artist:     artist,
-		DurationMS: mp3DurationMS(path),
-		Size:       info.Size(),
-		ModTime:    info.ModTime(),
+		path:    path,
+		Title:   title,
+		Artist:  artist,
+		Size:    info.Size(),
+		ModTime: info.ModTime(),
 	}
 
 	f, err := os.Open(path)
@@ -951,6 +1283,18 @@ func normalizeSearch(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func setTrackKeys(t *Track) {
+	if t == nil {
+		return
+	}
+	match := strings.Join([]string{normalizeSearch(t.Artist), normalizeSearch(t.Title)}, "|")
+	if strings.Trim(match, "|") == "" {
+		match = normalizeSearch(fallbackTitle(t.path))
+	}
+	t.MatchKey = match
+	t.DedupeKey = fmt.Sprintf("%s|%d|%d", match, t.Size, t.ModTime.Unix())
 }
 
 func fallbackTitle(path string) string {

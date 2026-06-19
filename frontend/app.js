@@ -20,6 +20,20 @@ const volumeInput = document.getElementById("volume");
 const searchInput = document.getElementById("q");
 const searchField = document.getElementById("searchField");
 const libraryStatus = document.getElementById("libraryStatus");
+const libraryTab = document.getElementById("libraryTab");
+const playlistsTab = document.getElementById("playlistsTab");
+const libraryViews = document.querySelectorAll(".library-view");
+const playlistsView = document.getElementById("playlistsView");
+const playlistSelect = document.getElementById("playlistSelect");
+const selectedPlaylistVisibility = document.getElementById("selectedPlaylistVisibility");
+const queuePlaylistButton = document.getElementById("queuePlaylist");
+const shufflePlaylistButton = document.getElementById("shufflePlaylist");
+const playlistDetailEl = document.getElementById("playlistDetail");
+const newPlaylistButton = document.getElementById("newPlaylist");
+const playlistCreatePanel = document.getElementById("playlistCreatePanel");
+const playlistCreateForm = document.getElementById("playlistCreateForm");
+const playlistNameInput = document.getElementById("playlistName");
+const playlistVisibility = document.getElementById("playlistVisibility");
 const currentUserEl = document.getElementById("currentUser");
 const roomSelect = document.getElementById("roomSelect");
 const logoutForm = document.getElementById("logoutForm");
@@ -35,6 +49,8 @@ let lastStateReceivedAt = 0;
 let searchTimer = 0;
 let seeking = false;
 let events = null;
+let playlists = [];
+let selectedPlaylistID = 0;
 
 let currentRoomID = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
 
@@ -266,12 +282,12 @@ function renderQueueItem(item) {
 }
 
 function renderHistoryItem(item) {
-  const track = item.track;
-  const trackID = item.track_id;
-  return trackRow(track || {id: item.track_id, title: `Track ${item.track_id}`}, [
-    ["Queue", {action: "queue_add", track_id: trackID}],
-    ["Play", {action: "play_now", track_id: trackID}],
-  ], item.requested_by);
+	const track = item.track;
+	const trackID = item.track_id;
+	return trackRow(track || {id: item.track_id, title: `Track ${item.track_id}`}, [
+		["Queue", {action: "queue_add", track_id: trackID}],
+		["Play", {action: "play_now", track_id: trackID}],
+	], item.requested_by, trackID);
 }
 
 function renderHistory(history) {
@@ -311,18 +327,81 @@ function trackMeta(titleText, subtitleText, requestedBy = "") {
   return meta;
 }
 
-function trackRow(track, actions, requestedBy = "") {
-  const row = document.createElement("div");
-  row.className = "item";
+function trackRow(track, actions, requestedBy = "", trackID = track?.id || 0) {
+	const row = document.createElement("div");
+	row.className = "item";
 
-  const meta = trackMeta(trackTitle(track), trackSubtitle(track), requestedBy);
+	const meta = trackMeta(trackTitle(track), trackSubtitle(track), requestedBy);
 
-  const actionEl = document.createElement("div");
-  actionEl.className = "row-actions";
-  actionEl.append(...actions.map(([text, body]) => commandButton(text, body)));
+	const actionEl = document.createElement("div");
+	actionEl.className = "row-actions";
+	actionEl.append(...actions.map(([text, body]) => commandButton(text, body)));
+	if (trackID > 0) {
+		actionEl.append(addToPlaylistButton(trackID));
+	}
 
-  row.append(meta, actionEl);
-  return row;
+	row.append(meta, actionEl);
+	return row;
+}
+
+function addToPlaylistButton(trackID) {
+	const editable = playlists.filter((playlist) => playlist.can_edit);
+	if (editable.length === 0) {
+		const button = document.createElement("button");
+		button.className = "secondary compact playlist-more-button";
+		button.type = "button";
+		button.textContent = "+";
+		button.setAttribute("aria-label", "Add to playlist");
+		button.disabled = true;
+		return button;
+	}
+	const wrap = document.createElement("div");
+	wrap.className = "playlist-add-menu";
+	const button = document.createElement("button");
+	button.className = "secondary compact playlist-more-button";
+	button.type = "button";
+	button.textContent = "+";
+	button.setAttribute("aria-label", "Add to playlist");
+	button.setAttribute("aria-haspopup", "menu");
+	button.setAttribute("aria-expanded", "false");
+	const menu = document.createElement("div");
+	menu.className = "playlist-add-options";
+	menu.hidden = true;
+	for (const playlist of editable) {
+		const item = document.createElement("button");
+		item.type = "button";
+		item.className = "playlist-add-option";
+		item.textContent = playlist.name;
+		item.addEventListener("click", async () => {
+			menu.hidden = true;
+			button.setAttribute("aria-expanded", "false");
+			await api(`/api/playlists/${playlist.id}/items`, {
+				method: "POST",
+				body: JSON.stringify({track_id: trackID}),
+			});
+			await loadPlaylists(playlist.id);
+		});
+		menu.append(item);
+	}
+	button.addEventListener("click", (event) => {
+		event.stopPropagation();
+		closePlaylistAddMenus(wrap);
+		const open = menu.hidden;
+		menu.hidden = !open;
+		button.setAttribute("aria-expanded", String(open));
+	});
+	wrap.append(button, menu);
+	return wrap;
+}
+
+function closePlaylistAddMenus(except = null) {
+	document.querySelectorAll(".playlist-add-menu").forEach((wrap) => {
+		if (wrap === except) return;
+		const menu = wrap.querySelector(".playlist-add-options");
+		const button = wrap.querySelector("button");
+		if (menu) menu.hidden = true;
+		if (button) button.setAttribute("aria-expanded", "false");
+	});
 }
 
 function renderSubtitle(element, subtitleText, requestedBy = "") {
@@ -435,6 +514,98 @@ async function loadLibraryStatus() {
   }
 }
 
+function setRailMode(mode) {
+	const playlistsActive = mode === "playlists";
+	libraryTab.classList.toggle("active", !playlistsActive);
+	playlistsTab.classList.toggle("active", playlistsActive);
+	libraryViews.forEach((el) => {
+		el.hidden = playlistsActive;
+	});
+	playlistsView.hidden = !playlistsActive;
+	if (playlistsActive) {
+		loadPlaylists(selectedPlaylistID).catch(console.error);
+	}
+}
+
+async function loadPlaylists(selectID = selectedPlaylistID) {
+	playlists = await api("/api/playlists");
+	if (!selectID && playlists.length > 0) {
+		selectID = playlists[0].id;
+	}
+	selectedPlaylistID = selectID;
+	renderPlaylists();
+	if (selectedPlaylistID) {
+		await loadPlaylistDetail(selectedPlaylistID);
+	} else {
+		playlistDetailEl.replaceChildren(emptyHint("No playlists yet"));
+	}
+	runSearch().catch(console.error);
+}
+
+function renderPlaylists() {
+	playlistSelect.replaceChildren(...playlists.map((playlist) => {
+		const option = document.createElement("option");
+		option.value = String(playlist.id);
+		option.textContent = playlist.name;
+		return option;
+	}));
+	playlistSelect.hidden = playlists.length === 0;
+	playlistSelect.value = selectedPlaylistID ? String(selectedPlaylistID) : "";
+	updatePlaylistActionButtons();
+}
+
+async function loadPlaylistDetail(id) {
+	const playlist = await api(`/api/playlists/${id}`);
+	renderPlaylistDetail(playlist);
+}
+
+function renderPlaylistItem(playlist, item) {
+	const row = document.createElement("div");
+	row.className = "item";
+	row.append(trackMeta(item.title || "Unknown track", [item.artist, item.album].filter(Boolean).join(" · ")));
+	if (playlist.can_edit) {
+		const actions = document.createElement("div");
+		actions.className = "row-actions";
+		const remove = document.createElement("button");
+		remove.className = "secondary compact danger";
+		remove.type = "button";
+		remove.textContent = "Remove";
+		remove.addEventListener("click", async () => {
+			const updated = await api(`/api/playlists/${playlist.id}/items/${item.id}`, {method: "DELETE"});
+			renderPlaylistDetail(updated);
+		});
+		actions.append(remove);
+		row.append(actions);
+	}
+	return row;
+}
+
+function renderPlaylistDetail(playlist) {
+	const items = playlist.items || [];
+	const list = document.createElement("div");
+	list.className = "playlist-items";
+	list.replaceChildren(...(items.length ? items.map((item) => renderPlaylistItem(playlist, item)) : [emptyHint("No tracks in this playlist")]));
+	playlistDetailEl.replaceChildren(list);
+	playlists = playlists.map((existing) => existing.id === playlist.id ? playlist : existing);
+	updatePlaylistActionButtons();
+}
+
+function updatePlaylistActionButtons() {
+	const playlist = playlists.find((item) => item.id === selectedPlaylistID);
+	const canRun = Boolean(playlist?.can_run);
+	selectedPlaylistVisibility.hidden = !playlist?.can_edit;
+	selectedPlaylistVisibility.value = playlist?.public ? "shared" : "private";
+	queuePlaylistButton.hidden = !canRun;
+	shufflePlaylistButton.hidden = !canRun;
+}
+
+function emptyHint(text) {
+	const hint = document.createElement("p");
+	hint.className = "hint";
+	hint.textContent = text;
+	return hint;
+}
+
 async function loadRooms() {
   const info = await api("/api/session");
   currentUserEl.textContent = info.user?.username || "Signed in";
@@ -470,6 +641,56 @@ async function runSearch() {
     ["Play", {action: "play_now", track_id: track.id}],
   ])));
 }
+
+libraryTab.addEventListener("click", () => setRailMode("library"));
+playlistsTab.addEventListener("click", () => setRailMode("playlists"));
+
+playlistSelect.addEventListener("change", async () => {
+	selectedPlaylistID = Number(playlistSelect.value);
+	if (!selectedPlaylistID) return;
+	await loadPlaylistDetail(selectedPlaylistID);
+	runSearch().catch(console.error);
+});
+
+queuePlaylistButton.addEventListener("click", async () => {
+	if (!selectedPlaylistID) return;
+	await command({action: "playlist_queue", playlist_id: selectedPlaylistID});
+});
+
+shufflePlaylistButton.addEventListener("click", async () => {
+	if (!selectedPlaylistID) return;
+	await command({action: "playlist_shuffle", playlist_id: selectedPlaylistID});
+});
+
+selectedPlaylistVisibility.addEventListener("change", async () => {
+	if (!selectedPlaylistID) return;
+	const playlist = await api(`/api/playlists/${selectedPlaylistID}`, {
+		method: "PATCH",
+		body: JSON.stringify({public: selectedPlaylistVisibility.value === "shared"}),
+	});
+	renderPlaylistDetail(playlist);
+});
+
+newPlaylistButton.addEventListener("click", () => {
+	const open = playlistCreatePanel.hidden;
+	playlistCreatePanel.hidden = !open;
+	if (open) {
+		playlistNameInput.focus();
+	}
+});
+
+playlistCreateForm.addEventListener("submit", async (event) => {
+	event.preventDefault();
+	const name = playlistNameInput.value.trim();
+	if (!name) return;
+	const playlist = await api("/api/playlists", {
+		method: "POST",
+		body: JSON.stringify({name, public: playlistVisibility.value === "shared"}),
+	});
+	playlistNameInput.value = "";
+	playlistCreatePanel.hidden = true;
+	await loadPlaylists(playlist.id);
+});
 
 document.getElementById("searchForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -549,6 +770,7 @@ presenceButton.addEventListener("click", () => {
 });
 
 document.addEventListener("click", (event) => {
+  closePlaylistAddMenus();
   if (event.target.closest(".presence-menu")) {
     return;
   }
@@ -560,6 +782,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") {
     return;
   }
+  closePlaylistAddMenus();
   listenerListEl.hidden = true;
   presenceButton.setAttribute("aria-expanded", "false");
 });
@@ -601,9 +824,10 @@ async function start() {
   events.addEventListener("state", (event) => {
     renderState(JSON.parse(event.data));
   });
-  loadLibraryStatus();
-  runSearch().catch(console.error);
-  api(roomAPI("/api/state")).then(renderState).catch(console.error);
+	loadLibraryStatus();
+	loadPlaylists().catch(console.error);
+	runSearch().catch(console.error);
+	api(roomAPI("/api/state")).then(renderState).catch(console.error);
 }
 
 start().catch(console.error);

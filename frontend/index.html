@@ -28,10 +28,13 @@
 
       <section class="search">
         <div class="section-head">
-          <h2>Library</h2>
+          <div class="rail-tabs" role="tablist" aria-label="Library views">
+            <button id="libraryTab" class="rail-tab active" type="button">Library</button>
+            <button id="playlistsTab" class="rail-tab" type="button">Playlists</button>
+          </div>
           <span id="libraryStatus" class="status"></span>
         </div>
-        <form id="searchForm">
+        <form id="searchForm" class="library-view">
           <label class="search-field">
             <span>Search by</span>
             <select id="searchField" name="field">
@@ -45,7 +48,32 @@
             <span class="search-icon" aria-hidden="true"></span>
           </label>
         </form>
-        <div id="results"></div>
+        <div id="results" class="library-view"></div>
+        <section id="playlistsView" class="playlists-view" hidden>
+          <div class="playlist-toolbar">
+            <button id="newPlaylist" class="secondary compact" type="button">New</button>
+          </div>
+          <div id="playlistCreatePanel" class="playlist-create-panel" hidden>
+            <form id="playlistCreateForm" class="playlist-create">
+              <input id="playlistName" type="text" placeholder="Playlist name" autocomplete="off">
+              <select id="playlistVisibility" aria-label="Playlist visibility">
+                <option value="shared" selected>Shared</option>
+                <option value="private">Private</option>
+              </select>
+              <button class="secondary compact" type="submit">Create</button>
+            </form>
+          </div>
+          <div class="playlist-control-row">
+            <select id="playlistSelect" aria-label="Playlist"></select>
+            <select id="selectedPlaylistVisibility" aria-label="Playlist visibility" hidden>
+              <option value="shared">Shared</option>
+              <option value="private">Private</option>
+            </select>
+            <button id="queuePlaylist" class="secondary compact" type="button" hidden>Queue</button>
+            <button id="shufflePlaylist" class="secondary compact" type="button" hidden>Shuffle</button>
+          </div>
+          <div id="playlistDetail"></div>
+        </section>
       </section>
     </aside>
 

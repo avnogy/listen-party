@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	musiclib "listen-party/internal/library"
 
@@ -148,6 +149,168 @@ func TestSearchFieldFiltersTitleArtistAndAlbum(t *testing.T) {
 	}
 }
 
+func TestSearchDeduplicatesCopiedTracks(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	rootA := filepath.Join(root, "a")
+	rootB := filepath.Join(root, "b")
+	for _, dir := range []string{rootA, rootB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	mtime := fixedModTime()
+	for _, path := range []string{
+		filepath.Join(rootA, "Artist - Same Song.mp3"),
+		filepath.Join(rootB, "Artist - Same Song.mp3"),
+	} {
+		if err := os.WriteFile(path, []byte("same bytes"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{rootA, rootB}, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	count, err := lib.Count(ctx)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("physical track count = %d, want 2", count)
+	}
+	tracks, err := lib.Search(ctx, "same")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("deduped search returned %d tracks, want 1", len(tracks))
+	}
+}
+
+func TestPlaylistResolvesRemainingDuplicateAfterRescan(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	rootA := filepath.Join(root, "a")
+	rootB := filepath.Join(root, "b")
+	for _, dir := range []string{rootA, rootB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	mtime := fixedModTime()
+	pathA := filepath.Join(rootA, "Artist - Same Song.mp3")
+	pathB := filepath.Join(rootB, "Artist - Same Song.mp3")
+	for _, path := range []string{pathA, pathB} {
+		if err := os.WriteFile(path, []byte("same bytes"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{rootA, rootB}, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	tracks, err := lib.Search(ctx, "same")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	playlist, err := lib.CreatePlaylist(ctx, "Favorites", "user1", true)
+	if err != nil {
+		t.Fatalf("create playlist: %v", err)
+	}
+	if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, tracks[0].ID); err != nil {
+		t.Fatalf("add playlist track: %v", err)
+	}
+	if err := os.Remove(pathA); err != nil {
+		t.Fatalf("remove duplicate: %v", err)
+	}
+	if err := lib.ScanDir(ctx, rootA); err != nil {
+		t.Fatalf("scan dir: %v", err)
+	}
+	resolved, err := lib.ResolvePlaylistTracks(ctx, playlist.ID)
+	if err != nil {
+		t.Fatalf("resolve playlist: %v", err)
+	}
+	if len(resolved) != 1 || resolved[0].Title != "Same Song" {
+		t.Fatalf("resolved tracks = %#v, want remaining duplicate", resolved)
+	}
+}
+
+func TestRemovePlaylistItem(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Artist - Track.mp3")
+	if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+		t.Fatalf("write mp3: %v", err)
+	}
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	tracks, err := lib.Search(ctx, "track")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	playlist, err := lib.CreatePlaylist(ctx, "Favorites", "user1", true)
+	if err != nil {
+		t.Fatalf("create playlist: %v", err)
+	}
+	item, err := lib.AddPlaylistTrack(ctx, playlist.ID, tracks[0].ID)
+	if err != nil {
+		t.Fatalf("add playlist track: %v", err)
+	}
+	if err := lib.RemovePlaylistItem(ctx, playlist.ID, item.ID); err != nil {
+		t.Fatalf("remove playlist item: %v", err)
+	}
+	items, err := lib.PlaylistItems(ctx, playlist.ID)
+	if err != nil {
+		t.Fatalf("playlist items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("playlist items after remove = %#v, want empty", items)
+	}
+}
+
+func TestUpdatePlaylistVisibility(t *testing.T) {
+	ctx := context.Background()
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	defer lib.Close()
+	playlist, err := lib.CreatePlaylist(ctx, "Favorites", "user1", true)
+	if err != nil {
+		t.Fatalf("create playlist: %v", err)
+	}
+	updated, err := lib.UpdatePlaylistVisibility(ctx, playlist.ID, false)
+	if err != nil {
+		t.Fatalf("update playlist visibility: %v", err)
+	}
+	if updated.Public {
+		t.Fatalf("playlist public = true, want false")
+	}
+}
+
 func TestSQLiteFTS5Available(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "tracks.sqlite"))
@@ -158,6 +321,10 @@ func TestSQLiteFTS5Available(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE VIRTUAL TABLE fts_check USING fts5(value)`); err != nil {
 		t.Fatalf("create fts5 table: %v", err)
 	}
+}
+
+func fixedModTime() time.Time {
+	return time.Unix(1_700_000_000, 0)
 }
 
 func TestScanSkipsUnchangedFiles(t *testing.T) {
