@@ -21,6 +21,31 @@ type PlaybackItem struct {
 	Source      string    `json:"source,omitempty"`
 }
 
+const (
+	AutoDJSourceLibrary  = "library"
+	AutoDJSourcePlaylist = "playlist"
+)
+
+type AutoDJSource struct {
+	Type       string `json:"type"`
+	PlaylistID int64  `json:"playlist_id,omitempty"`
+	Name       string `json:"name"`
+}
+
+type AutoDJState struct {
+	Enabled bool         `json:"enabled"`
+	Source  AutoDJSource `json:"source"`
+}
+
+type RoomAudio struct {
+	Volume float64 `json:"volume"`
+	Muted  bool    `json:"muted"`
+}
+
+func defaultAutoDJSource() AutoDJSource {
+	return AutoDJSource{Type: AutoDJSourceLibrary, Name: "Entire Library"}
+}
+
 type PlaybackState struct {
 	RoomID            string         `json:"room_id"`
 	Current           PlaybackItem   `json:"-"`
@@ -30,7 +55,8 @@ type PlaybackState struct {
 	Queue             []PlaybackItem `json:"queue"`
 	History           []PlaybackItem `json:"history"`
 	Listeners         []string       `json:"listeners"`
-	AutoDJEnabled     bool           `json:"auto_dj_enabled"`
+	AutoDJ            AutoDJState    `json:"auto_dj"`
+	RoomAudio         RoomAudio      `json:"room_audio"`
 	ServerTime        time.Time      `json:"server_time"`
 	Disconnect        bool           `json:"-"`
 }
@@ -47,18 +73,23 @@ type Playback struct {
 	pausePos           int64
 	queue              []PlaybackItem
 	history            []PlaybackItem
-	autoDJEnabled      bool
+	autoDJ             AutoDJState
 	autoDJNext         string
+	autoDJEntries      []int64
+	autoDJPreparing    bool
+	roomAudio          RoomAudio
 	notify             map[chan PlaybackState]UserInfo
 	listeners          map[string]*listenerPresence
 	listenerGrace      time.Duration
 	disconnected       map[string]bool
+	nextListenerOrder  uint64
 }
 
 type listenerPresence struct {
 	username    string
 	connections int
 	generation  uint64
+	order       uint64
 }
 
 const defaultListenerGrace = 10 * time.Second
@@ -66,6 +97,8 @@ const defaultListenerGrace = 10 * time.Second
 func NewPlayback(roomID string) *Playback {
 	return &Playback{
 		roomID:        roomID,
+		autoDJ:        AutoDJState{Source: defaultAutoDJSource()},
+		roomAudio:     RoomAudio{Volume: 0.25},
 		notify:        make(map[chan PlaybackState]UserInfo),
 		listeners:     make(map[string]*listenerPresence),
 		listenerGrace: defaultListenerGrace,
@@ -293,38 +326,154 @@ func (p *Playback) ClearHistory() PlaybackState {
 	return p.stateLocked()
 }
 
+func (p *Playback) SetRoomAudio(volume float64, muted bool) PlaybackState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.roomAudio = RoomAudio{Volume: volume, Muted: muted}
+	p.bumpLocked()
+	return p.stateLocked()
+}
+
 func (p *Playback) Snapshot() PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.stateLocked()
 }
 
-func (p *Playback) ConfigureAutoDJ(enabled bool, candidate string) PlaybackState {
+func (p *Playback) ConfigureAutoDJ(enabled bool, candidate string, entries []int64) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.autoDJEnabled = enabled
+	p.autoDJ.Enabled = enabled
 	if enabled {
 		p.autoDJNext = candidate
+		p.autoDJEntries = entries
 	} else {
 		p.autoDJNext = ""
+		p.autoDJEntries = nil
 	}
+	p.autoDJPreparing = false
 	p.bumpLocked()
 	return p.stateLocked()
 }
 
-func (p *Playback) AutoDJCandidate() (bool, string) {
+func (p *Playback) ConfigureAutoDJForSource(source AutoDJSource, enabled bool, candidate string, entries []int64) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.autoDJEnabled, p.autoDJNext
+	if p.autoDJ.Source != source {
+		return p.stateLocked(), false
+	}
+	p.autoDJ.Enabled = enabled
+	if enabled {
+		p.autoDJNext = candidate
+		p.autoDJEntries = entries
+	} else {
+		p.autoDJNext = ""
+		p.autoDJEntries = nil
+	}
+	p.autoDJPreparing = false
+	p.bumpLocked()
+	return p.stateLocked(), true
 }
 
-func (p *Playback) SetAutoDJCandidateIfEmpty(candidate string) PlaybackState {
+func (p *Playback) ConfigureAutoDJSource(source AutoDJSource, candidate string, entries []int64) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.autoDJEnabled && p.autoDJNext == "" {
+	p.autoDJ.Source = source
+	if p.autoDJ.Enabled {
+		p.autoDJNext = candidate
+		p.autoDJEntries = entries
+	} else {
+		p.autoDJNext = ""
+		p.autoDJEntries = nil
+	}
+	p.autoDJPreparing = false
+	p.bumpLocked()
+	return p.stateLocked()
+}
+
+func (p *Playback) AutoDJConfiguration() (AutoDJState, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.autoDJ, p.autoDJNext
+}
+
+func (p *Playback) BeginAutoDJCandidate(source AutoDJSource) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoDJ.Enabled || p.autoDJ.Source != source || p.autoDJNext != "" || p.autoDJPreparing {
+		return false
+	}
+	p.autoDJPreparing = true
+	return true
+}
+
+func (p *Playback) CompleteAutoDJCandidate(source AutoDJSource, candidate string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoDJ.Enabled || p.autoDJ.Source != source || !p.autoDJPreparing {
+		return false
+	}
+	p.autoDJPreparing = false
+	if p.autoDJNext == "" {
 		p.autoDJNext = candidate
 	}
-	return p.stateLocked()
+	return true
+}
+
+func (p *Playback) ClearAutoDJCandidate(source AutoDJSource) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoDJ.Enabled || p.autoDJ.Source != source {
+		return false
+	}
+	p.autoDJNext = ""
+	p.autoDJPreparing = false
+	return true
+}
+
+func (p *Playback) TakeAutoDJEntry(source AutoDJSource) (int64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoDJ.Enabled || p.autoDJ.Source != source || !p.autoDJPreparing || len(p.autoDJEntries) == 0 {
+		return 0, false
+	}
+	last := len(p.autoDJEntries) - 1
+	id := p.autoDJEntries[last]
+	p.autoDJEntries = p.autoDJEntries[:last]
+	return id, true
+}
+
+func (p *Playback) RefillAutoDJEntries(source AutoDJSource, entries []int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoDJ.Enabled || p.autoDJ.Source != source || !p.autoDJPreparing || len(p.autoDJEntries) != 0 {
+		return false
+	}
+	p.autoDJEntries = entries
+	return true
+}
+
+func (p *Playback) ResetAutoDJPlaylistSource(playlistID int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.autoDJ.Source.Type != AutoDJSourcePlaylist || p.autoDJ.Source.PlaylistID != playlistID {
+		return false
+	}
+	p.autoDJ = AutoDJState{Source: defaultAutoDJSource()}
+	p.autoDJNext = ""
+	p.autoDJEntries = nil
+	p.autoDJPreparing = false
+	p.bumpLocked()
+	return true
+}
+
+func (p *Playback) InvalidateAutoDJPlaylistCandidate(playlistID int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.autoDJ.Source.Type == AutoDJSourcePlaylist && p.autoDJ.Source.PlaylistID == playlistID {
+		p.autoDJNext = ""
+		p.autoDJPreparing = false
+	}
 }
 
 func (p *Playback) Notify() {
@@ -417,7 +566,7 @@ func (p *Playback) CloseSubscribers() {
 
 func (p *Playback) startNextLocked() bool {
 	if len(p.queue) == 0 {
-		if p.autoDJEnabled && p.autoDJNext != "" {
+		if p.autoDJ.Enabled && p.autoDJNext != "" {
 			p.recordCurrentLocked()
 			p.current = p.autoDJNext
 			p.currentRequestedBy = ""
@@ -497,26 +646,31 @@ func (p *Playback) stateLocked() PlaybackState {
 		Queue:             queue,
 		History:           history,
 		Listeners:         listeners,
-		AutoDJEnabled:     p.autoDJEnabled,
+		AutoDJ:            p.autoDJ,
+		RoomAudio:         p.roomAudio,
 		ServerTime:        time.Now(),
 	}
 }
 
 func (p *Playback) listenersLocked() []string {
-	seen := make(map[string]string, len(p.listeners))
+	type displayName struct {
+		username string
+		order    uint64
+	}
+	seen := make(map[string]displayName, len(p.listeners))
 	for _, listener := range p.listeners {
 		username := strings.TrimSpace(listener.username)
 		if username == "" {
 			continue
 		}
 		key := strings.ToLower(username)
-		if _, ok := seen[key]; !ok {
-			seen[key] = username
+		if existing, ok := seen[key]; !ok || listener.order < existing.order {
+			seen[key] = displayName{username: username, order: listener.order}
 		}
 	}
 	listeners := make([]string, 0, len(seen))
-	for _, username := range seen {
-		listeners = append(listeners, username)
+	for _, display := range seen {
+		listeners = append(listeners, display.username)
 	}
 	slices.Sort(listeners)
 	return listeners
@@ -529,7 +683,8 @@ func (p *Playback) listenerJoinedLocked(listener UserInfo) {
 	identity := listenerUserIdentity(listener)
 	presence := p.listeners[identity]
 	if presence == nil {
-		presence = &listenerPresence{}
+		p.nextListenerOrder++
+		presence = &listenerPresence{order: p.nextListenerOrder}
 		p.listeners[identity] = presence
 	}
 	presence.username = listener.Username

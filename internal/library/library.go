@@ -143,6 +143,7 @@ const (
 )
 
 const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available`
+const qualifiedTrackSelectColumns = `t.id, t.path, t.title, t.artist, t.album, t.track_no, t.duration_ms, t.size, t.mod_time, t.dedupe_key, t.match_key, t.available`
 
 func Open(ctx context.Context, path string, dirs []string, workers int) (*Library, error) {
 	db, err := openDB(path)
@@ -258,6 +259,7 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 	FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items(playlist_id, position);
+CREATE INDEX IF NOT EXISTS playlist_items_playlist_dedupe_idx ON playlist_items(playlist_id, dedupe_key);
 `)
 	if err != nil {
 		return err
@@ -823,11 +825,7 @@ func (l *Library) ListPlaylists(ctx context.Context) ([]Playlist, error) {
 }
 
 func (l *Library) GetPlaylist(ctx context.Context, id int64) (Playlist, error) {
-	row := l.db.QueryRowContext(ctx, `SELECT id, name, owner_id, created_at, updated_at FROM playlists WHERE id = ?`, id)
-	p, err := scanPlaylist(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Playlist{}, ErrPlaylistNotFound
-	}
+	p, err := l.GetPlaylistMetadata(ctx, id)
 	if err != nil {
 		return Playlist{}, err
 	}
@@ -836,6 +834,18 @@ func (l *Library) GetPlaylist(ctx context.Context, id int64) (Playlist, error) {
 		return Playlist{}, err
 	}
 	p.Items = items
+	return p, nil
+}
+
+func (l *Library) GetPlaylistMetadata(ctx context.Context, id int64) (Playlist, error) {
+	row := l.db.QueryRowContext(ctx, `SELECT id, name, owner_id, created_at, updated_at FROM playlists WHERE id = ?`, id)
+	p, err := scanPlaylist(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Playlist{}, ErrPlaylistNotFound
+	}
+	if err != nil {
+		return Playlist{}, err
+	}
 	return p, nil
 }
 
@@ -1108,26 +1118,52 @@ func (l *Library) ResolveDedupeKey(ctx context.Context, key string) (Track, erro
 	return track, err
 }
 
-func (l *Library) RandomTrack(ctx context.Context, excludeKeys []string) (Track, error) {
-	args := make([]any, 0, len(excludeKeys))
-	filter := ""
-	if len(excludeKeys) > 0 {
-		placeholders := make([]string, len(excludeKeys))
-		for i, key := range excludeKeys {
-			placeholders[i] = "?"
-			args = append(args, key)
-		}
-		filter = " AND dedupe_key NOT IN (" + strings.Join(placeholders, ",") + ")"
+func (l *Library) ShuffleTrackIDs(ctx context.Context) ([]int64, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT MIN(id) FROM tracks WHERE available = 1 GROUP BY dedupe_key`)
+	if err != nil {
+		return nil, err
 	}
-	row := l.db.QueryRowContext(ctx, `
-SELECT `+trackSelectColumns+` FROM (
-	SELECT `+trackSelectColumns+`, row_number() OVER (PARTITION BY dedupe_key ORDER BY path ASC) AS rn
-	FROM tracks
-	WHERE available = 1`+filter+`
-)
-WHERE rn = 1
-ORDER BY random()
-LIMIT 1`, args...)
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (l *Library) PlaylistShuffleItemIDs(ctx context.Context, playlistID int64) ([]int64, error) {
+	rows, err := l.db.QueryContext(ctx, `
+SELECT MIN(pi.id)
+FROM playlist_items pi
+WHERE pi.playlist_id = ?
+  AND EXISTS (SELECT 1 FROM tracks t WHERE t.dedupe_key = pi.dedupe_key AND t.available = 1)
+GROUP BY pi.dedupe_key`, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (l *Library) PlaylistItemTrack(ctx context.Context, playlistID, itemID int64) (Track, error) {
+	row := l.db.QueryRowContext(ctx, `SELECT `+qualifiedTrackSelectColumns+`
+FROM playlist_items pi
+JOIN tracks t ON t.dedupe_key = pi.dedupe_key AND t.available = 1
+WHERE pi.playlist_id = ? AND pi.id = ?
+ORDER BY t.path
+LIMIT 1`, playlistID, itemID)
 	track, err := scanTrack(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Track{}, ErrTrackNotFound

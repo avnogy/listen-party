@@ -106,7 +106,7 @@ func TestSearchOrdersByTitleAscending(t *testing.T) {
 	}
 }
 
-func TestRandomTrackExcludesLogicalKeys(t *testing.T) {
+func TestShuffleTrackIDsListEachLogicalTrack(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, name := range []string{"Artist - First.mp3", "Artist - Second.mp3"} {
@@ -126,12 +126,88 @@ func TestRandomTrackExcludesLogicalKeys(t *testing.T) {
 	if err != nil || len(tracks) != 2 {
 		t.Fatalf("tracks = %#v, err = %v", tracks, err)
 	}
-	got, err := lib.RandomTrack(ctx, []string{tracks[0].DedupeKey})
+	ids, err := lib.ShuffleTrackIDs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DedupeKey != tracks[1].DedupeKey {
-		t.Fatalf("random key = %q, want %q", got.DedupeKey, tracks[1].DedupeKey)
+	if len(ids) != len(tracks) {
+		t.Fatalf("shuffle IDs = %v, want one per logical track", ids)
+	}
+	for _, id := range ids {
+		if _, err := lib.GetCached(ctx, id); err != nil {
+			t.Fatalf("resolve shuffle ID %d: %v", id, err)
+		}
+	}
+}
+
+func TestPlaylistShuffleItemIDsResolveAvailableItems(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Artist - Selected.mp3"), []byte("selected"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tracks, err := lib.Search(ctx, "Selected")
+	if err != nil || len(tracks) != 1 {
+		t.Fatalf("tracks = %#v, err = %v", tracks, err)
+	}
+	playlist, err := lib.CreatePlaylist(ctx, "Selected", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := lib.AddPlaylistTrack(ctx, playlist.ID, tracks[0].DedupeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, tracks[0].DedupeKey); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := lib.PlaylistShuffleItemIDs(ctx, playlist.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != item.ID {
+		t.Fatalf("playlist shuffle IDs = %v, want [%d]", ids, item.ID)
+	}
+	got, err := lib.PlaylistItemTrack(ctx, playlist.ID, ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DedupeKey != tracks[0].DedupeKey {
+		t.Fatalf("playlist item key = %q, want %q", got.DedupeKey, tracks[0].DedupeKey)
+	}
+	if err := lib.RemovePlaylistItem(ctx, playlist.ID, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lib.PlaylistItemTrack(ctx, playlist.ID, item.ID); !errors.Is(err, musiclib.ErrTrackNotFound) {
+		t.Fatalf("removed playlist item error = %v, want ErrTrackNotFound", err)
+	}
+}
+
+func TestPlaylistShuffleItemIDsAllowEmptyPlaylist(t *testing.T) {
+	ctx := context.Background()
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{t.TempDir()}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	playlist, err := lib.CreatePlaylist(ctx, "Empty", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := lib.PlaylistShuffleItemIDs(ctx, playlist.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("empty playlist shuffle IDs = %v, want none", ids)
 	}
 }
 
@@ -230,6 +306,13 @@ func TestSearchDeduplicatesCopiedTracks(t *testing.T) {
 	}
 	if len(tracks) != 1 {
 		t.Fatalf("deduped search returned %d tracks, want 1", len(tracks))
+	}
+	ids, err := lib.ShuffleTrackIDs(ctx)
+	if err != nil {
+		t.Fatalf("shuffle IDs: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("shuffle IDs = %v, want one logical track", ids)
 	}
 }
 

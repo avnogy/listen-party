@@ -9,6 +9,8 @@ const presenceButton = document.getElementById("presenceButton");
 const listenerListEl = document.getElementById("listenerList");
 const clearQueueButton = document.getElementById("clearQueue");
 const autoDJButton = document.getElementById("autoDJ");
+const autoDJSourceButton = document.getElementById("autoDJSource");
+const autoDJSourceMenu = document.getElementById("autoDJSourceMenu");
 const clearHistoryButton = document.getElementById("clearHistory");
 const previousButton = document.getElementById("previous");
 const skipButton = document.getElementById("skip");
@@ -19,6 +21,7 @@ const elapsedEl = document.getElementById("elapsed");
 const durationEl = document.getElementById("duration");
 const muteButton = document.getElementById("mute");
 const volumeInput = document.getElementById("volume");
+const volumeModeButton = document.getElementById("volumeMode");
 const searchInput = document.getElementById("q");
 const searchField = document.getElementById("searchField");
 const libraryStatus = document.getElementById("libraryStatus");
@@ -28,8 +31,6 @@ const libraryPanel = document.getElementById("libraryPanel");
 const libraryViews = document.querySelectorAll(".library-view");
 const playlistsView = document.getElementById("playlistsView");
 const playlistSelect = document.getElementById("playlistSelect");
-const queuePlaylistButton = document.getElementById("queuePlaylist");
-const shufflePlaylistButton = document.getElementById("shufflePlaylist");
 const deletePlaylistButton = document.getElementById("deletePlaylist");
 const playlistDetailEl = document.getElementById("playlistDetail");
 const newPlaylistButton = document.getElementById("newPlaylist");
@@ -56,6 +57,8 @@ const searchTextStorageKey = "listen-party.searchText";
 const searchFieldStorageKey = "listen-party.searchField";
 const railModeStorageKey = "listen-party.railMode";
 const playlistStorageKey = "listen-party.selectedPlaylist";
+const localVolumeStorageKey = "listen-party.localVolume";
+const localMutedStorageKey = "listen-party.localMuted";
 const minimumRoomSaveFeedbackMS = 450;
 const roomSaveResultVisibleMS = 1400;
 
@@ -73,6 +76,9 @@ let queueReorderPending = false;
 let pendingQueueState = null;
 let canAdministerCurrentRoom = false;
 let roomSaveFeedbackTimer = 0;
+let volumeMode = "local";
+let localVolume = 0;
+let localMuted = false;
 
 let currentRoomID = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
 
@@ -232,11 +238,36 @@ function renderVolumeButton() {
   muteButton.classList.toggle("muted", muted);
 }
 
-function setVolume(value) {
+function applyAudioSettings(value, muted) {
   const max = Number(volumeInput.max) || 1;
   audio.volume = Math.max(0, Math.min(max, value));
-  audio.muted = audio.volume === 0;
+  audio.muted = Boolean(muted) || audio.volume === 0;
   volumeInput.value = String(audio.volume);
+  renderVolumeButton();
+}
+
+function volumeModeStorageKey() {
+  return `listen-party.volumeMode.${currentRoomID || "default"}`;
+}
+
+function restoreVolumePreferences() {
+  const storedVolume = Number(storageGet(localVolumeStorageKey));
+  localVolume = Number.isFinite(storedVolume) ? Math.max(0, Math.min(Number(volumeInput.max), storedVolume)) : 0;
+  localMuted = storageGet(localMutedStorageKey) === "true";
+  volumeMode = storageGet(volumeModeStorageKey()) === "room" ? "room" : "local";
+  renderVolumeControl();
+}
+
+function renderVolumeControl() {
+  const roomMode = volumeMode === "room";
+  const roomAudio = lastState?.room_audio || {volume: defaultVolume, muted: false};
+  const canControlRoomVolume = hasRoomPermission("volume_control");
+  volumeModeButton.textContent = roomMode ? "Room" : "Local";
+  volumeModeButton.setAttribute("aria-pressed", String(roomMode));
+  volumeModeButton.title = roomMode ? "Use local volume" : "Use room volume";
+  volumeInput.disabled = roomMode && !canControlRoomVolume;
+  muteButton.disabled = roomMode && !canControlRoomVolume;
+  applyAudioSettings(roomMode ? roomAudio.volume : localVolume, roomMode ? roomAudio.muted : localMuted);
 }
 
 function clearArtwork() {
@@ -294,16 +325,22 @@ function renderState(state) {
     syncAudio(state);
   }
 
-  queueEl.replaceChildren(...queue.map(renderQueueItem));
+  queueEl.replaceChildren(...(queue.length ? queue.map(renderQueueItem) : [emptyHint("Queue is empty", "li")]));
   renderHistory(history);
   const canManageQueue = hasRoomPermission("queue_manage");
   const canControlPlayback = hasRoomPermission("playback_control");
   clearQueueButton.hidden = !canManageQueue || queue.length === 0;
+  const autoDJ = state.auto_dj || {enabled: false, source: {type: "library", name: "Entire Library"}};
   autoDJButton.disabled = !canManageQueue;
-  autoDJButton.dataset.enabled = String(Boolean(state.auto_dj_enabled));
-  autoDJButton.setAttribute("aria-pressed", String(Boolean(state.auto_dj_enabled)));
-  autoDJButton.title = state.auto_dj_enabled ? "Disable Auto-DJ" : "Enable Auto-DJ";
+  autoDJSourceButton.disabled = !canManageQueue;
+  if (!canManageQueue) closeAutoDJSourceMenu();
+  autoDJButton.dataset.enabled = String(Boolean(autoDJ.enabled));
+  autoDJButton.setAttribute("aria-pressed", String(Boolean(autoDJ.enabled)));
+  autoDJButton.title = autoDJ.enabled ? "Disable Auto-DJ" : "Enable Auto-DJ";
   autoDJButton.setAttribute("aria-label", autoDJButton.title);
+  autoDJSourceButton.textContent = autoDJ.source?.name || "Entire Library";
+  autoDJSourceButton.title = `Auto-DJ source: ${autoDJSourceButton.textContent}`;
+  renderVolumeControl();
   clearHistoryButton.hidden = !canManageQueue || history.length === 0;
   renderPresence(state);
   previousButton.disabled = !canControlPlayback || history.length === 0;
@@ -354,9 +391,53 @@ function renderPresence(state) {
   }
 }
 
+function closeAutoDJSourceMenu() {
+  autoDJSourceMenu.hidden = true;
+  autoDJSourceButton.setAttribute("aria-expanded", "false");
+}
+
+function renderAutoDJSourceMenu(availablePlaylists) {
+  const selected = lastState?.auto_dj?.source || {type: "library"};
+  const sources = [
+    {type: "library", name: "Entire Library"},
+    ...availablePlaylists.map((playlist) => ({type: "playlist", playlist_id: playlist.id, name: playlist.name})),
+  ];
+  autoDJSourceMenu.replaceChildren(...sources.map((source) => {
+    const active = source.type === selected.type && (source.type !== "playlist" || source.playlist_id === selected.playlist_id);
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "auto-dj-source-option";
+    item.setAttribute("role", "menuitemradio");
+    item.setAttribute("aria-checked", String(active));
+    item.textContent = source.name;
+    item.addEventListener("click", async () => {
+      if (active) {
+        closeAutoDJSourceMenu();
+        return;
+      }
+      item.disabled = true;
+      try {
+        await command({
+          action: "auto_dj_source",
+          source: source.type === "playlist" ? {type: "playlist", playlist_id: source.playlist_id} : {type: "library"},
+        });
+        closeAutoDJSourceMenu();
+      } catch (err) {
+        console.error(err);
+        item.disabled = false;
+        const error = document.createElement("p");
+        error.className = "auto-dj-source-error";
+        error.textContent = err.message || "Could not change Auto-DJ source";
+        autoDJSourceMenu.append(error);
+      }
+    });
+    return item;
+  }));
+}
+
 function renderQueueItem(item) {
   const li = document.createElement("li");
-  li.className = "queue-item";
+  li.className = "item queue-item";
   li.dataset.queueItemId = String(item.id);
 
   const track = item.track;
@@ -441,14 +522,34 @@ function renderHistory(history) {
 
 function commandButton(text, body) {
   const button = document.createElement("button");
-  button.className = "secondary compact";
-  button.textContent = text;
+  button.className = "secondary compact row-command-button";
+  button.title = text;
+  button.setAttribute("aria-label", text);
   button.dataset.roomAction = body.action;
+  const icon = commandIcon(body.action);
+  if (icon) {
+    const iconEl = document.createElement("span");
+    iconEl.className = "command-icon";
+    iconEl.setAttribute("aria-hidden", "true");
+    iconEl.textContent = icon;
+    button.append(iconEl);
+  }
+  const label = document.createElement("span");
+  label.className = "command-label";
+  label.textContent = text;
+  button.append(label);
   button.hidden = !canRunCommand(body.action);
-  button.addEventListener("click", async () => {
+  button.addEventListener("click", async (event) => {
     await command(body);
+    if (event.detail > 0) button.blur();
   });
   return button;
+}
+
+function commandIcon(action) {
+  if (action === "queue_add") return "≡+";
+  if (action === "play_now" || action === "play") return "▶";
+  return "";
 }
 
 function commandTrashButton(label, body) {
@@ -475,7 +576,7 @@ function refreshPermissionControls() {
   document.querySelectorAll("[data-room-action]").forEach((button) => {
     button.hidden = !canRunCommand(button.dataset.roomAction);
   });
-  document.querySelectorAll(".item .row-actions, .queue-item .row-actions").forEach(updateRowActionLayout);
+  document.querySelectorAll(".item .row-actions").forEach(updateRowActionLayout);
   updatePlaylistActionButtons();
 }
 
@@ -499,7 +600,7 @@ function canRunCommand(action) {
   if (["play", "play_now", "pause", "previous", "seek", "skip"].includes(action)) {
     return hasRoomPermission("playback_control");
   }
-  if (["queue_add", "playlist_queue", "playlist_shuffle"].includes(action)) {
+  if (action === "queue_add") {
     return hasRoomPermission("queue_add");
   }
   return hasRoomPermission("queue_manage");
@@ -560,6 +661,7 @@ function addToPlaylistButton(dedupeKey) {
 	button.className = "secondary compact playlist-more-button";
 	button.type = "button";
 	setPlaylistButtonContent(button);
+	button.title = "Add to playlist";
 	button.setAttribute("aria-label", "Add to playlist");
 	if (editable.length === 0) {
 		button.disabled = true;
@@ -862,16 +964,21 @@ function roomGrantRow(group, permissions = [], builtIn = false) {
 	row.className = "room-settings-grant";
 	const head = document.createElement("div");
 	head.className = "room-settings-grant-head";
+	const groupWrap = document.createElement("label");
+	groupWrap.className = "room-settings-group-field";
+	const groupLabel = document.createElement("span");
+	groupLabel.textContent = builtIn ? "Default access" : "PocketBase group";
 	const input = document.createElement("input");
 	input.className = "room-settings-group";
 	input.value = builtIn ? "Everyone" : group;
 	input.dataset.group = builtIn ? "everyone" : "";
 	input.placeholder = "PocketBase group";
 	input.readOnly = builtIn;
-	head.append(input);
+	groupWrap.append(groupLabel, input);
+	head.append(groupWrap);
 	if (!builtIn) {
 		const remove = document.createElement("button");
-		remove.className = "secondary compact";
+		remove.className = "secondary compact room-settings-remove";
 		remove.type = "button";
 		remove.textContent = "Remove";
 		remove.addEventListener("click", () => row.remove());
@@ -879,14 +986,26 @@ function roomGrantRow(group, permissions = [], builtIn = false) {
 	}
 	const permissionList = document.createElement("div");
 	permissionList.className = "room-settings-permissions";
-	for (const [value, labelText] of [["queue_add", "Add to queue"], ["queue_manage", "Manage queue"], ["playback_control", "Control playback"]]) {
+	for (const [value, labelText] of [
+		["queue_add", "Add tracks to the queue"],
+		["queue_manage", "Manage queued tracks"],
+		["playback_control", "Control playback"],
+		["volume_control", "Control room volume"],
+	]) {
 		const label = document.createElement("label");
 		label.className = "checkbox-label";
 		const checkbox = document.createElement("input");
 		checkbox.type = "checkbox";
 		checkbox.dataset.permission = value;
 		checkbox.checked = permissions.includes(value);
-		label.append(checkbox, document.createTextNode(` ${labelText}`));
+		label.classList.toggle("checked", checkbox.checked);
+		checkbox.addEventListener("change", () => {
+			label.classList.toggle("checked", checkbox.checked);
+		});
+		const text = document.createElement("span");
+		text.className = "permission-text";
+		text.textContent = labelText;
+		label.append(checkbox, text);
 		permissionList.append(label);
 	}
 	row.append(head, permissionList);
@@ -993,16 +1112,13 @@ function renderPlaylistDetail(playlist) {
 
 function updatePlaylistActionButtons() {
 	const playlist = playlists.find((item) => item.id === selectedPlaylistID);
-	const canRun = Boolean(playlist) && hasRoomPermission("queue_add");
-	queuePlaylistButton.hidden = !canRun;
-	shufflePlaylistButton.hidden = !canRun;
 	deletePlaylistButton.hidden = !playlist?.can_edit;
 	importPlaylistFolderButton.hidden = !playlist?.can_edit;
 }
 
-function emptyHint(text) {
-	const hint = document.createElement("p");
-	hint.className = "hint";
+function emptyHint(text, tag = "p") {
+	const hint = document.createElement(tag);
+	hint.className = "hint empty-state";
 	hint.textContent = text;
 	return hint;
 }
@@ -1045,7 +1161,7 @@ async function runSearch() {
   if (q !== searchInput.value.trim() || field !== searchField.value) {
     return;
   }
-  resultsEl.replaceChildren(...tracks.map((track) => trackRow(track, standardTrackCommands(track.dedupe_key))));
+  resultsEl.replaceChildren(...(tracks.length ? tracks.map((track) => trackRow(track, standardTrackCommands(track.dedupe_key))) : [emptyHint("No matching tracks")]));
 }
 
 libraryTab.addEventListener("click", () => setRailMode("library"));
@@ -1060,16 +1176,6 @@ playlistSelect.addEventListener("change", async () => {
 	storageSet(playlistStorageKey, selectedPlaylistID);
 	await loadPlaylistDetail(selectedPlaylistID);
 	runSearch().catch(console.error);
-});
-
-queuePlaylistButton.addEventListener("click", async () => {
-	if (!selectedPlaylistID) return;
-	await command({action: "playlist_queue", playlist_id: selectedPlaylistID});
-});
-
-shufflePlaylistButton.addEventListener("click", async () => {
-	if (!selectedPlaylistID) return;
-	await command({action: "playlist_shuffle", playlist_id: selectedPlaylistID});
 });
 
 deletePlaylistButton.addEventListener("click", async () => {
@@ -1228,21 +1334,53 @@ seekInput.addEventListener("change", async () => {
 volumeInput.addEventListener("input", () => {
   const next = Number(volumeInput.value);
   if (!Number.isFinite(next)) return;
-  setVolume(next);
+  if (volumeMode === "room") {
+    applyAudioSettings(next, false);
+  } else {
+    localVolume = next;
+    localMuted = next === 0;
+    storageSet(localVolumeStorageKey, localVolume);
+    storageSet(localMutedStorageKey, localMuted);
+    applyAudioSettings(localVolume, localMuted);
+  }
   syncCurrentAudio();
 });
 
-muteButton.addEventListener("click", () => {
-  if (audio.muted || audio.volume === 0) {
-    if (audio.volume === 0) {
-      setVolume(defaultVolume);
-    }
-    audio.muted = false;
-    syncCurrentAudio();
+volumeInput.addEventListener("change", async () => {
+  if (volumeMode !== "room" || !hasRoomPermission("volume_control")) return;
+  try {
+    await command({action: "room_audio", volume: Number(volumeInput.value), muted: false});
+  } catch (err) {
+    console.error(err);
+    renderVolumeControl();
+  }
+});
+
+volumeModeButton.addEventListener("click", () => {
+  volumeMode = volumeMode === "room" ? "local" : "room";
+  storageSet(volumeModeStorageKey(), volumeMode);
+  renderVolumeControl();
+});
+
+muteButton.addEventListener("click", async () => {
+  if (volumeMode === "room") {
+    if (!hasRoomPermission("volume_control")) return;
+    const roomAudio = lastState?.room_audio || {volume: defaultVolume, muted: false};
+    const muted = !roomAudio.muted && roomAudio.volume > 0;
+    const volume = !muted && roomAudio.volume === 0 ? defaultVolume : roomAudio.volume;
+    await command({action: "room_audio", volume, muted});
     return;
   }
-  audio.muted = true;
-  renderVolumeButton();
+  if (localMuted || localVolume === 0) {
+    if (localVolume === 0) localVolume = defaultVolume;
+    localMuted = false;
+  } else {
+    localMuted = true;
+  }
+  storageSet(localVolumeStorageKey, localVolume);
+  storageSet(localMutedStorageKey, localMuted);
+  applyAudioSettings(localVolume, localMuted);
+  syncCurrentAudio();
 });
 
 presenceButton.addEventListener("click", () => {
@@ -1253,6 +1391,7 @@ presenceButton.addEventListener("click", () => {
 
 document.addEventListener("click", (event) => {
   closePlaylistAddMenus();
+  if (!event.target.closest(".auto-dj-control")) closeAutoDJSourceMenu();
   if (event.target.closest(".presence-menu")) {
     return;
   }
@@ -1265,6 +1404,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   closePlaylistAddMenus();
+  closeAutoDJSourceMenu();
   if (!roomSettingsView.hidden) closeRoomSettings();
   listenerListEl.hidden = true;
   presenceButton.setAttribute("aria-expanded", "false");
@@ -1273,8 +1413,7 @@ document.addEventListener("keydown", (event) => {
 restoreSearchPreferences();
 restoreRailPreferences();
 renderPlaybackButton(false);
-setVolume(0);
-renderVolumeButton();
+applyAudioSettings(0, false);
 
 clearQueueButton.addEventListener("click", async () => {
   await command({action: "queue_clear"});
@@ -1283,6 +1422,28 @@ clearQueueButton.addEventListener("click", async () => {
 autoDJButton.addEventListener("click", async () => {
   const enabled = autoDJButton.dataset.enabled !== "true";
   await command({action: "auto_dj", enabled});
+});
+
+autoDJSourceButton.addEventListener("click", async (event) => {
+  event.stopPropagation();
+  if (!autoDJSourceMenu.hidden) {
+    closeAutoDJSourceMenu();
+    return;
+  }
+  autoDJSourceMenu.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "auto-dj-source-status";
+  loading.textContent = "Loading sources...";
+  autoDJSourceMenu.append(loading);
+  autoDJSourceMenu.hidden = false;
+  autoDJSourceButton.setAttribute("aria-expanded", "true");
+  try {
+    const availablePlaylists = await api("/api/playlists");
+    if (!autoDJSourceMenu.hidden) renderAutoDJSourceMenu(availablePlaylists);
+  } catch (err) {
+    console.error(err);
+    loading.textContent = err.message || "Could not load shuffle sources";
+  }
 });
 
 clearHistoryButton.addEventListener("click", async () => {
@@ -1308,6 +1469,7 @@ async function start() {
   if (!await loadRooms()) {
     return;
   }
+	restoreVolumePreferences();
 	initQueueSortable();
 	connectEvents();
 	loadLibraryStatus();

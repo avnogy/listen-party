@@ -32,6 +32,9 @@ type Server struct {
 }
 
 const maxFolderImportFiles = 50_000
+const maxRoomVolume = 0.5
+
+var errAutoDJConfigurationChanged = errors.New("auto-dj configuration changed")
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -492,6 +495,7 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
+	s.Rooms.InvalidateAutoDJPlaylistCandidate(id)
 	playlist, err = s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
 		writeError(w, err)
@@ -561,6 +565,7 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.Rooms.ResetAutoDJPlaylistSource(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -745,13 +750,15 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Action            string `json:"action"`
-		DedupeKey         string `json:"dedupe_key"`
-		PlaylistID        int64  `json:"playlist_id"`
-		QueueItemID       int64  `json:"queue_item_id"`
-		BeforeQueueItemID int64  `json:"before_queue_item_id"`
-		PositionMS        int64  `json:"position_ms"`
-		Enabled           bool   `json:"enabled"`
+		Action            string       `json:"action"`
+		DedupeKey         string       `json:"dedupe_key"`
+		QueueItemID       int64        `json:"queue_item_id"`
+		BeforeQueueItemID int64        `json:"before_queue_item_id"`
+		PositionMS        int64        `json:"position_ms"`
+		Enabled           bool         `json:"enabled"`
+		Source            AutoDJSource `json:"source"`
+		Volume            float64      `json:"volume"`
+		Muted             bool         `json:"muted"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -768,15 +775,58 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	switch req.Action {
 	case "auto_dj":
 		if !req.Enabled {
-			s.writeCommandState(w, r, "auto_dj_disable", room, user.Username, room.Playback.ConfigureAutoDJ(false, ""))
+			s.writeCommandState(w, r, "auto_dj_disable", room, user.Username, room.Playback.ConfigureAutoDJ(false, "", nil))
 			return
 		}
-		candidate, err := s.autoDJCandidate(r.Context(), room)
+		config, _ := room.Playback.AutoDJConfiguration()
+		candidate, entries, err := s.newAutoDJCycle(r.Context(), config.Source)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		s.writeCommandState(w, r, "auto_dj_enable", room, user.Username, room.Playback.ConfigureAutoDJ(true, candidate))
+		state, configured := room.Playback.ConfigureAutoDJForSource(config.Source, true, candidate, entries)
+		if !configured {
+			http.Error(w, "shuffle source changed; retry", http.StatusConflict)
+			return
+		}
+		s.writeCommandState(w, r, "auto_dj_enable", room, user.Username, state)
+	case "auto_dj_source":
+		source, err := s.resolveAutoDJSource(r.Context(), req.Source)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		config, _ := room.Playback.AutoDJConfiguration()
+		if !config.Enabled {
+			var available bool
+			if source.Type == AutoDJSourceLibrary {
+				count, err := s.Library.Count(r.Context())
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				available = count > 0
+			} else {
+				entries, err := s.Library.PlaylistShuffleItemIDs(r.Context(), source.PlaylistID)
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				available = len(entries) > 0
+			}
+			if !available {
+				http.Error(w, "shuffle source contains no available tracks", http.StatusConflict)
+				return
+			}
+			s.writeCommandState(w, r, "auto_dj_source", room, user.Username, room.Playback.ConfigureAutoDJSource(source, "", nil))
+			return
+		}
+		candidate, entries, err := s.newAutoDJCycle(r.Context(), source)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.writeCommandState(w, r, "auto_dj_source", room, user.Username, room.Playback.ConfigureAutoDJSource(source, candidate, entries))
 	case "queue_add":
 		if req.DedupeKey == "" {
 			http.Error(w, "dedupe_key is required", http.StatusBadRequest)
@@ -830,6 +880,12 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		s.writeCommandState(w, r, "play_now", room, user.Username, room.Playback.PlayNow(req.DedupeKey, user.Username))
 	case "pause":
 		s.writeCommandState(w, r, "pause", room, user.Username, room.Playback.Pause())
+	case "room_audio":
+		if req.Volume < 0 || req.Volume > maxRoomVolume {
+			http.Error(w, "volume must be between 0 and 0.5", http.StatusBadRequest)
+			return
+		}
+		s.writeCommandState(w, r, "room_audio", room, user.Username, room.Playback.SetRoomAudio(req.Volume, req.Muted))
 	case "previous":
 		s.writeCommandState(w, r, "previous", room, user.Username, room.Playback.Previous())
 	case "seek":
@@ -844,49 +900,27 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		s.writeCommandState(w, r, "skip", room, user.Username, state)
 	case "history_clear":
 		s.writeCommandState(w, r, "history_clear", room, user.Username, room.Playback.ClearHistory())
-	case "playlist_queue", "playlist_shuffle":
-		if req.PlaylistID <= 0 {
-			http.Error(w, "playlist_id is required", http.StatusBadRequest)
-			return
-		}
-		if _, err := s.Library.GetPlaylist(r.Context(), req.PlaylistID); err != nil {
-			writeError(w, err)
-			return
-		}
-		tracks, err := s.Library.ResolvePlaylistTracks(r.Context(), req.PlaylistID)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		keys := make([]string, 0, len(tracks))
-		for _, track := range tracks {
-			keys = append(keys, track.DedupeKey)
-		}
-		if req.Action == "playlist_shuffle" {
-			rand.Shuffle(len(keys), func(i, j int) {
-				keys[i], keys[j] = keys[j], keys[i]
-			})
-		}
-		s.writeCommandState(w, r, req.Action, room, user.Username, room.Playback.AddMany(keys, user.Username))
 	}
 }
 
 func permissionForAction(action string) (RoomPermission, bool) {
 	switch action {
-	case "queue_add", "playlist_queue", "playlist_shuffle":
+	case "queue_add":
 		return PermissionQueueAdd, true
-	case "queue_remove", "queue_reorder", "queue_clear", "history_clear", "auto_dj":
+	case "queue_remove", "queue_reorder", "queue_clear", "history_clear", "auto_dj", "auto_dj_source":
 		return PermissionQueueManage, true
 	case "play", "play_now", "pause", "previous", "seek", "skip":
 		return PermissionPlaybackControl, true
+	case "room_audio":
+		return PermissionVolumeControl, true
 	default:
 		return "", false
 	}
 }
 
 func (s *Server) prepareAutoDJ(ctx context.Context, room *Room) error {
-	enabled, candidate := room.Playback.AutoDJCandidate()
-	if !enabled {
+	config, candidate := room.Playback.AutoDJConfiguration()
+	if !config.Enabled {
 		return nil
 	}
 	if candidate != "" {
@@ -895,49 +929,147 @@ func (s *Server) prepareAutoDJ(ctx context.Context, room *Room) error {
 		} else if !errors.Is(err, musiclib.ErrTrackNotFound) {
 			return err
 		}
-		room.Playback.ConfigureAutoDJ(true, "")
+		if !room.Playback.ClearAutoDJCandidate(config.Source) {
+			return nil
+		}
 	}
-	track, err := s.autoDJCandidate(ctx, room)
+	_, err := s.prepareAutoDJCandidate(ctx, room, config.Source)
 	if errors.Is(err, musiclib.ErrTrackNotFound) {
+		room.Playback.ConfigureAutoDJ(false, "", nil)
+		return nil
+	}
+	if errors.Is(err, errAutoDJConfigurationChanged) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	room.Playback.SetAutoDJCandidateIfEmpty(track)
 	return nil
 }
 
 func (s *Server) replenishAutoDJ(ctx context.Context, room *Room) {
-	enabled, candidate := room.Playback.AutoDJCandidate()
-	if !enabled || candidate != "" {
+	config, candidate := room.Playback.AutoDJConfiguration()
+	if !config.Enabled || candidate != "" {
 		return
 	}
-	track, err := s.autoDJCandidate(ctx, room)
+	_, err := s.prepareAutoDJCandidate(ctx, room, config.Source)
 	if err != nil {
+		if errors.Is(err, errAutoDJConfigurationChanged) {
+			return
+		}
 		slog.Warn("prepare next auto-dj track", "room", room.ID, "error", err)
+		if errors.Is(err, musiclib.ErrTrackNotFound) || errors.Is(err, musiclib.ErrPlaylistNotFound) {
+			room.Playback.ConfigureAutoDJ(false, "", nil)
+		}
 		return
 	}
-	room.Playback.SetAutoDJCandidateIfEmpty(track)
 }
 
-func (s *Server) autoDJCandidate(ctx context.Context, room *Room) (string, error) {
-	state := room.Playback.Snapshot()
-	excluded := make([]string, 0, len(state.History)+1)
-	if state.Current.DedupeKey != "" {
-		excluded = append(excluded, state.Current.DedupeKey)
-	}
-	for _, item := range state.History {
-		excluded = append(excluded, item.DedupeKey)
-	}
-	track, err := s.Library.RandomTrack(ctx, excluded)
-	if errors.Is(err, musiclib.ErrTrackNotFound) && len(excluded) > 0 {
-		track, err = s.Library.RandomTrack(ctx, nil)
-	}
+func (s *Server) newAutoDJCycle(ctx context.Context, source AutoDJSource) (string, []int64, error) {
+	entries, err := s.autoDJEntries(ctx, source)
 	if err != nil {
+		return "", nil, err
+	}
+	if len(entries) == 0 {
+		return "", nil, musiclib.ErrTrackNotFound
+	}
+	rand.Shuffle(len(entries), func(i, j int) { entries[i], entries[j] = entries[j], entries[i] })
+	return s.resolveAutoDJEntries(ctx, source, entries)
+}
+
+func (s *Server) autoDJEntries(ctx context.Context, source AutoDJSource) ([]int64, error) {
+	if source.Type == AutoDJSourcePlaylist {
+		return s.Library.PlaylistShuffleItemIDs(ctx, source.PlaylistID)
+	}
+	return s.Library.ShuffleTrackIDs(ctx)
+}
+
+func (s *Server) nextAutoDJCandidate(ctx context.Context, room *Room, source AutoDJSource) (string, error) {
+	for {
+		entry, ok := room.Playback.TakeAutoDJEntry(source)
+		if ok {
+			track, err := s.resolveAutoDJEntry(ctx, source, entry)
+			if errors.Is(err, musiclib.ErrTrackNotFound) {
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+			return track.DedupeKey, nil
+		}
+		entries, err := s.autoDJEntries(ctx, source)
+		if err != nil {
+			return "", err
+		}
+		if len(entries) == 0 {
+			return "", musiclib.ErrTrackNotFound
+		}
+		rand.Shuffle(len(entries), func(i, j int) { entries[i], entries[j] = entries[j], entries[i] })
+		if room.Playback.RefillAutoDJEntries(source, entries) {
+			continue
+		}
+		config, _ := room.Playback.AutoDJConfiguration()
+		if !config.Enabled || config.Source != source {
+			return "", errAutoDJConfigurationChanged
+		}
+	}
+}
+
+func (s *Server) prepareAutoDJCandidate(ctx context.Context, room *Room, source AutoDJSource) (string, error) {
+	if !room.Playback.BeginAutoDJCandidate(source) {
+		return "", errAutoDJConfigurationChanged
+	}
+	candidate, err := s.nextAutoDJCandidate(ctx, room, source)
+	if err != nil {
+		room.Playback.CompleteAutoDJCandidate(source, "")
 		return "", err
 	}
-	return track.DedupeKey, nil
+	if !room.Playback.CompleteAutoDJCandidate(source, candidate) {
+		return "", errAutoDJConfigurationChanged
+	}
+	return candidate, nil
+}
+
+func (s *Server) resolveAutoDJEntries(ctx context.Context, source AutoDJSource, entries []int64) (string, []int64, error) {
+	for len(entries) > 0 {
+		last := len(entries) - 1
+		entry := entries[last]
+		entries = entries[:last]
+		track, err := s.resolveAutoDJEntry(ctx, source, entry)
+		if errors.Is(err, musiclib.ErrTrackNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		return track.DedupeKey, entries, nil
+	}
+	return "", nil, musiclib.ErrTrackNotFound
+}
+
+func (s *Server) resolveAutoDJEntry(ctx context.Context, source AutoDJSource, entry int64) (musiclib.Track, error) {
+	if source.Type == AutoDJSourcePlaylist {
+		return s.Library.PlaylistItemTrack(ctx, source.PlaylistID, entry)
+	}
+	return s.Library.GetCached(ctx, entry)
+}
+
+func (s *Server) resolveAutoDJSource(ctx context.Context, source AutoDJSource) (AutoDJSource, error) {
+	switch source.Type {
+	case AutoDJSourceLibrary:
+		return defaultAutoDJSource(), nil
+	case AutoDJSourcePlaylist:
+		if source.PlaylistID <= 0 {
+			return AutoDJSource{}, errors.New("playlist_id is required for playlist shuffle")
+		}
+		playlist, err := s.Library.GetPlaylistMetadata(ctx, source.PlaylistID)
+		if err != nil {
+			return AutoDJSource{}, err
+		}
+		return AutoDJSource{Type: AutoDJSourcePlaylist, PlaylistID: playlist.ID, Name: playlist.Name}, nil
+	default:
+		return AutoDJSource{}, errors.New("shuffle source type must be library or playlist")
+	}
 }
 
 func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {

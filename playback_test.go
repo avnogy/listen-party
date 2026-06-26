@@ -60,6 +60,17 @@ func TestSeekUpdatesSharedPosition(t *testing.T) {
 	}
 }
 
+func TestRoomAudioIsSharedPlaybackState(t *testing.T) {
+	p := NewPlayback("default")
+	if got := p.Snapshot().RoomAudio; got != (RoomAudio{Volume: 0.25}) {
+		t.Fatalf("default room audio = %#v", got)
+	}
+	state := p.SetRoomAudio(0.4, true)
+	if state.RoomAudio != (RoomAudio{Volume: 0.4, Muted: true}) {
+		t.Fatalf("room audio = %#v", state.RoomAudio)
+	}
+}
+
 func TestQueueRemoveAndClear(t *testing.T) {
 	p := NewPlayback("default")
 	p.Add("10", "alice")
@@ -345,7 +356,7 @@ func TestDisconnectListenerBlocksOnlyTheActiveSession(t *testing.T) {
 
 func TestAutoDJStartsPreparedTrackOnlyAfterQueueIsExhausted(t *testing.T) {
 	p := NewPlayback("main")
-	p.ConfigureAutoDJ(true, "random")
+	p.ConfigureAutoDJ(true, "random", nil)
 	p.Add("queued", "alice")
 	state, err := p.Play()
 	if err != nil {
@@ -358,16 +369,16 @@ func TestAutoDJStartsPreparedTrackOnlyAfterQueueIsExhausted(t *testing.T) {
 	if state.Current.DedupeKey != "random" || state.Current.Source != "auto_dj" || state.Current.RequestedBy != "" {
 		t.Fatalf("auto-dj current = %#v", state.Current)
 	}
-	if _, candidate := p.AutoDJCandidate(); candidate != "" {
+	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
 		t.Fatalf("consumed candidate = %q, want empty", candidate)
 	}
 }
 
 func TestDisablingAutoDJClearsPreparedTrack(t *testing.T) {
 	p := NewPlayback("main")
-	p.ConfigureAutoDJ(true, "random")
-	state := p.ConfigureAutoDJ(false, "")
-	if state.AutoDJEnabled {
+	p.ConfigureAutoDJ(true, "random", []int64{1, 2})
+	state := p.ConfigureAutoDJ(false, "", nil)
+	if state.AutoDJ.Enabled {
 		t.Fatal("auto-dj remained enabled")
 	}
 	if _, err := p.Play(); !errors.Is(err, ErrEmptyQueue) {
@@ -375,14 +386,67 @@ func TestDisablingAutoDJClearsPreparedTrack(t *testing.T) {
 	}
 }
 
+func TestAutoDJSourceCanChangeWithoutEnablingPlayback(t *testing.T) {
+	p := NewPlayback("main")
+	source := AutoDJSource{Type: AutoDJSourcePlaylist, PlaylistID: 7, Name: "Evening"}
+	state := p.ConfigureAutoDJSource(source, "prepared", nil)
+	if state.AutoDJ.Enabled || state.AutoDJ.Source != source {
+		t.Fatalf("auto-dj = %#v, want disabled playlist source", state.AutoDJ)
+	}
+	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
+		t.Fatalf("disabled candidate = %q, want empty", candidate)
+	}
+	state = p.ConfigureAutoDJ(true, "prepared", nil)
+	if !state.AutoDJ.Enabled || state.AutoDJ.Source != source {
+		t.Fatalf("enabled auto-dj = %#v, want playlist source", state.AutoDJ)
+	}
+}
+
+func TestPlaylistChangesInvalidateAutoDJCandidates(t *testing.T) {
+	p := NewPlayback("main")
+	source := AutoDJSource{Type: AutoDJSourcePlaylist, PlaylistID: 7, Name: "Evening"}
+	p.ConfigureAutoDJSource(source, "", nil)
+	p.ConfigureAutoDJ(true, "prepared", []int64{1, 2})
+	p.InvalidateAutoDJPlaylistCandidate(source.PlaylistID)
+	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
+		t.Fatalf("candidate after playlist edit = %q, want empty", candidate)
+	}
+	if !p.ResetAutoDJPlaylistSource(source.PlaylistID) {
+		t.Fatal("playlist source was not reset")
+	}
+	state := p.Snapshot().AutoDJ
+	if state.Enabled || state.Source != defaultAutoDJSource() {
+		t.Fatalf("auto-dj after playlist deletion = %#v", state)
+	}
+}
+
+func TestAutoDJEntriesAreConsumedFromTheShuffledBag(t *testing.T) {
+	p := NewPlayback("main")
+	source := defaultAutoDJSource()
+	p.ConfigureAutoDJ(true, "current", []int64{1, 2})
+	p.ClearAutoDJCandidate(source)
+	if !p.BeginAutoDJCandidate(source) {
+		t.Fatal("could not begin candidate preparation")
+	}
+	for _, want := range []int64{2, 1} {
+		got, ok := p.TakeAutoDJEntry(source)
+		if !ok || got != want {
+			t.Fatalf("entry = %d, %v, want %d, true", got, ok, want)
+		}
+	}
+	if _, ok := p.TakeAutoDJEntry(source); ok {
+		t.Fatal("exhausted shuffle bag returned another entry")
+	}
+}
+
 func TestQueuedTrackConsumesMatchingAutoDJCandidate(t *testing.T) {
 	p := NewPlayback("main")
-	p.ConfigureAutoDJ(true, "same")
+	p.ConfigureAutoDJ(true, "same", nil)
 	p.Add("same", "alice")
 	if _, err := p.Play(); err != nil {
 		t.Fatal(err)
 	}
-	if _, candidate := p.AutoDJCandidate(); candidate != "" {
+	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
 		t.Fatalf("candidate = %q, want consumed", candidate)
 	}
 }

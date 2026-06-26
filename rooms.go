@@ -11,6 +11,7 @@ const (
 	PermissionQueueAdd        RoomPermission = "queue_add"
 	PermissionQueueManage     RoomPermission = "queue_manage"
 	PermissionPlaybackControl RoomPermission = "playback_control"
+	PermissionVolumeControl   RoomPermission = "volume_control"
 	EveryoneRoomGrant                        = "everyone"
 )
 
@@ -18,6 +19,7 @@ var roomPermissions = []RoomPermission{
 	PermissionQueueAdd,
 	PermissionQueueManage,
 	PermissionPlaybackControl,
+	PermissionVolumeControl,
 }
 
 type Room struct {
@@ -126,6 +128,28 @@ func (m *RoomManager) List() []Room {
 		})
 	}
 	return rooms
+}
+
+func (m *RoomManager) ResetAutoDJPlaylistSource(playlistID int64) {
+	for _, playback := range m.playbacks() {
+		playback.ResetAutoDJPlaylistSource(playlistID)
+	}
+}
+
+func (m *RoomManager) InvalidateAutoDJPlaylistCandidate(playlistID int64) {
+	for _, playback := range m.playbacks() {
+		playback.InvalidateAutoDJPlaylistCandidate(playlistID)
+	}
+}
+
+func (m *RoomManager) playbacks() []*Playback {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	playbacks := make([]*Playback, 0, len(m.rooms))
+	for _, room := range m.rooms {
+		playbacks = append(playbacks, room.Playback)
+	}
+	return playbacks
 }
 
 func UserHasRoomPermission(user UserInfo, room Room, permission RoomPermission) bool {

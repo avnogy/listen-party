@@ -14,7 +14,7 @@ authentication are stored beside the configuration file.
 - Multiple rooms with independent playback, queue, and history state.
 - Shared play/pause, seek, skip, previous, and play-now controls.
 - Queue add, remove, clear, and drag-and-drop reordering.
-- Optional per-room Auto-DJ playback when the queue is exhausted.
+- Optional per-room Auto-DJ playback in shuffled library or playlist cycles when the queue is exhausted.
 - Persistent user playlists with owner/admin editing.
 - Native folder selection for importing indexed network-share tracks into playlists.
 - Room permissions for everyone or selected authentication groups.
@@ -111,7 +111,8 @@ A new configuration has this shape:
         "everyone": [
           "queue_add",
           "queue_manage",
-          "playback_control"
+          "playback_control",
+          "volume_control"
         ]
       }
     }
@@ -150,9 +151,10 @@ Application admins implicitly receive every room permission.
 
 | Permission | Allows |
 | --- | --- |
-| `queue_add` | Add tracks; queue or shuffle playlists |
+| `queue_add` | Add tracks to the queue |
 | `queue_manage` | Remove, reorder, or clear queued tracks; clear history; toggle Auto-DJ |
 | `playback_control` | Play, pause, seek, skip, previous, and play-now |
+| `volume_control` | Change synchronized room volume and mute state |
 
 Example restricted room:
 
@@ -191,7 +193,7 @@ can resume.
 All enabled users can view playlists and create their own. Playlist owners and
 application admins can add tracks, remove tracks, and delete the playlist.
 
-Queueing or shuffling a playlist uses the room's `queue_add` permission.
+Auto-DJ playlist shuffling uses the room's `queue_manage` permission.
 Playlist viewing and ownership are independent of room permissions.
 
 Playlist owners and application admins can use **Import from path...** to
@@ -274,7 +276,7 @@ library database; handle them as sensitive backups.
 
 - Browser autoplay policy may require one user interaction before audio starts.
 - Synchronization is intended for shared listening, not sample-accurate audio.
-- Volume and mute are local to each browser.
+- Each browser can use local volume or follow synchronized room volume.
 - Search/view preferences and the last selected playlist are stored in browser
   local storage.
 

@@ -103,11 +103,16 @@ func TestRoomCommandRequiresItsPermission(t *testing.T) {
 			Grants: map[string][]RoomPermission{"staff": {PermissionPlaybackControl}},
 		}}},
 	}).Handler()
-	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"queue_add","dedupe_key":"track"}`))
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("queue_add status = %d, want %d", rec.Code, http.StatusForbidden)
+	for _, body := range []string{
+		`{"action":"queue_add","dedupe_key":"track"}`,
+		`{"action":"room_audio","volume":0.4}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("command %s status = %d, want %d", body, rec.Code, http.StatusForbidden)
+		}
 	}
 }
 
@@ -150,22 +155,6 @@ func TestQueueRejectsUnknownTrack(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown track status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
-func TestQueueRejectsUnknownPlaylist(t *testing.T) {
-	ctx := context.Background()
-	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lib.Close()
-	server := queueTestServer(lib).Handler()
-	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"playlist_queue","playlist_id":999}`))
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("unknown playlist status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -219,12 +208,12 @@ func TestQueueReorderUsesStableQueueItemIDs(t *testing.T) {
 }
 
 func TestPermissionForActionKeepsCapabilitiesIndependent(t *testing.T) {
-	for _, action := range []string{"queue_add", "playlist_queue", "playlist_shuffle"} {
+	for _, action := range []string{"queue_add"} {
 		if permission, ok := permissionForAction(action); !ok || permission != PermissionQueueAdd {
 			t.Fatalf("%s permission = %q, %v", action, permission, ok)
 		}
 	}
-	for _, action := range []string{"queue_remove", "queue_reorder", "queue_clear", "history_clear", "auto_dj"} {
+	for _, action := range []string{"queue_remove", "queue_reorder", "queue_clear", "history_clear", "auto_dj", "auto_dj_source"} {
 		if permission, ok := permissionForAction(action); !ok || permission != PermissionQueueManage {
 			t.Fatalf("%s permission = %q, %v", action, permission, ok)
 		}
@@ -233,6 +222,41 @@ func TestPermissionForActionKeepsCapabilitiesIndependent(t *testing.T) {
 		if permission, ok := permissionForAction(action); !ok || permission != PermissionPlaybackControl {
 			t.Fatalf("%s permission = %q, %v", action, permission, ok)
 		}
+	}
+	if permission, ok := permissionForAction("room_audio"); !ok || permission != PermissionVolumeControl {
+		t.Fatalf("room_audio permission = %q, %v", permission, ok)
+	}
+}
+
+func TestRoomAudioCommandUpdatesSharedState(t *testing.T) {
+	ctx := context.Background()
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	server := testServer(&Server{
+		Auth:    fakeAuth{user: UserInfo{Username: "alice", Groups: []string{"staff"}}},
+		Library: lib,
+		Config: Config{Rooms: []Room{{
+			ID: "main", Name: "Main", Grants: map[string][]RoomPermission{"staff": {PermissionVolumeControl}},
+		}}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"room_audio","volume":0.4,"muted":true}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("room_audio status = %d: %s", rec.Code, rec.Body.String())
+	}
+	room, _ := server.Rooms.Get("main")
+	if got := room.Playback.Snapshot().RoomAudio; got != (RoomAudio{Volume: 0.4, Muted: true}) {
+		t.Fatalf("room audio = %#v", got)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"room_audio","volume":0.6}`))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid room_audio status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 
@@ -256,6 +280,15 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 	if err != nil || len(tracks) != 2 {
 		t.Fatalf("tracks = %#v, err = %v", tracks, err)
 	}
+	playlist, err := lib.CreatePlaylist(ctx, "Both", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, track := range tracks {
+		if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, track.DedupeKey); err != nil {
+			t.Fatal(err)
+		}
+	}
 	server := testServer(&Server{
 		Auth:    fakeAuth{user: UserInfo{Username: "alice", Groups: []string{"staff"}}},
 		Library: lib,
@@ -268,27 +301,42 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 	room, _ := server.Rooms.Get("main")
 	room.Playback.PlayNow(tracks[0].DedupeKey, "alice")
 
-	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"auto_dj","enabled":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(fmt.Sprintf(`{"action":"auto_dj_source","source":{"type":"playlist","playlist_id":%d}}`, playlist.ID)))
 	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("source status = %d: %s", rec.Code, rec.Body.String())
+	}
+	configured := room.Playback.Snapshot().AutoDJ
+	if configured.Enabled || configured.Source.PlaylistID != playlist.ID || configured.Source.Name != playlist.Name {
+		t.Fatalf("configured auto-dj = %#v", configured)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"auto_dj","enabled":true}`))
+	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("enable status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if !room.Playback.Snapshot().AutoDJEnabled {
+	if !room.Playback.Snapshot().AutoDJ.Enabled {
 		t.Fatal("auto-dj was not enabled")
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"skip"}`))
-	rec = httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("skip status = %d: %s", rec.Code, rec.Body.String())
+	seen := make(map[string]bool)
+	for range tracks {
+		req = httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"skip"}`))
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("skip status = %d: %s", rec.Code, rec.Body.String())
+		}
+		state := room.Playback.Snapshot()
+		if state.Current.Source != "auto_dj" || seen[state.Current.DedupeKey] {
+			t.Fatalf("auto-dj repeated within cycle: %#v", state.Current)
+		}
+		seen[state.Current.DedupeKey] = true
 	}
-	state := room.Playback.Snapshot()
-	if state.Current.Source != "auto_dj" || state.Current.DedupeKey == "" || state.Current.DedupeKey == tracks[0].DedupeKey {
-		t.Fatalf("auto-dj current = %#v", state.Current)
-	}
-	if _, candidate := room.Playback.AutoDJCandidate(); candidate == "" {
+	if _, candidate := room.Playback.AutoDJConfiguration(); candidate == "" {
 		t.Fatal("next auto-dj candidate was not prepared")
 	}
 }

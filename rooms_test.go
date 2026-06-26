@@ -68,6 +68,9 @@ func TestUserHasRoomPermission(t *testing.T) {
 	if UserHasRoomPermission(UserInfo{Groups: []string{"staff"}}, room, PermissionQueueAdd) {
 		t.Fatal("queue management implied queue addition")
 	}
+	if UserHasRoomPermission(UserInfo{Groups: []string{"staff"}}, room, PermissionVolumeControl) {
+		t.Fatal("queue management implied volume control")
+	}
 	if !UserHasRoomPermission(UserInfo{Role: RoleAdmin}, room, PermissionPlaybackControl) {
 		t.Fatal("admin did not receive implicit permissions")
 	}
