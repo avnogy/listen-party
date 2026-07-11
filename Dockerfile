@@ -12,7 +12,7 @@ FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates
 
-RUN addgroup -S listenparty && adduser -S -G listenparty listenparty
+RUN addgroup -S -g 1000 listenparty && adduser -S -u 1000 -G listenparty listenparty
 
 ENV XDG_CONFIG_HOME=/data
 
