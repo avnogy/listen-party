@@ -1,0 +1,11 @@
+services:
+  listen-party:
+    build:
+      context: .
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+          ignore:
+            - .data/
+            - .git/

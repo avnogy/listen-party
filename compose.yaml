@@ -1,0 +1,9 @@
+services:
+  listen-party:
+    image: ${LISTEN_PARTY_IMAGE:-listen-party:local}
+    container_name: listen-party
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - .data:/data
