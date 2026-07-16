@@ -114,7 +114,12 @@ function renderQueueChanges(actions) {
     const meta = document.createElement("div");
     meta.className = "queue-change-meta";
     const metadata = [
-      [formatActionTime(action.at), "queue-change-time"],
+      [(() => {
+        const time = Date.parse(action.at || "");
+        return Number.isFinite(time)
+          ? new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}).format(new Date(time))
+          : "";
+      })(), "queue-change-time"],
       [action.ip, "queue-change-ip"],
       [action.username, "queue-change-username"],
     ];
@@ -139,12 +144,6 @@ function renderQueueChanges(actions) {
     empty.textContent = "No queue changes yet";
     queueChangesListEl.append(empty);
   }
-}
-
-function formatActionTime(value) {
-  const time = Date.parse(value || "");
-  if (!Number.isFinite(time)) return "";
-  return new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}).format(new Date(time));
 }
 
 function renderPresence(state) {

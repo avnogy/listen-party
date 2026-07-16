@@ -121,13 +121,12 @@ function trackContext(track) {
   return [track.artist, track.album].filter(Boolean).join(" · ");
 }
 
-function trackSubtitle(track) {
-  return [trackContext(track), track?.track_no ? `Track ${track.track_no}` : ""].filter(Boolean).join(" · ");
-}
-
-function trackSubtitleWithDuration(track) {
-  const duration = track?.duration_ms > 0 ? formatTime(track.duration_ms / 1000) : "";
-  return [trackSubtitle(track), duration].filter(Boolean).join(" · ");
+function trackSubtitle(track, includeDuration = false) {
+  const parts = [trackContext(track), track?.track_no ? `Track ${track.track_no}` : ""];
+  if (includeDuration && track?.duration_ms > 0) {
+    parts.push(formatTime(track.duration_ms / 1000));
+  }
+  return parts.filter(Boolean).join(" · ");
 }
 
 function formatTime(seconds) {
@@ -230,7 +229,7 @@ function loadArtwork(track) {
 export {
   roomAPI, restoreSearchPreferences, restoreRailPreferences, closeEvents, forceLogout,
   connectEvents, recoverPlaybackClient, hasMedia, mediaURL, loadMedia, syncCurrentAudio,
-  trackTitle, trackContext, trackSubtitle, trackSubtitleWithDuration, formatTime,
+  trackTitle, trackContext, trackSubtitle, formatTime,
   mediaDuration, setSeekUI, playbackPosition, renderPlaybackButton, renderVolumeButton,
   applyAudioSettings, volumeModeStorageKey, restoreVolumePreferences, renderVolumeControl,
   clearArtwork, loadArtwork,

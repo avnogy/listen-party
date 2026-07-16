@@ -1,7 +1,7 @@
 import {appState, ui} from "./main-context.js";
 import {api} from "../shared/api-module.js";
 import {loadPlaylists} from "./playlists.js";
-import {trackTitle, trackSubtitle, trackSubtitleWithDuration} from "./core.js";
+import {trackTitle, trackSubtitle} from "./core.js";
 import {submitQueueReorder, command} from "./player.js";
 import {updatePlaylistActionButtons} from "./playlists.js";
 const { history: historyEl, queue: queueEl } = ui;
@@ -15,13 +15,16 @@ function renderQueueItem(item) {
   const track = item.track;
   const meta = trackMeta(
     track ? trackTitle(track) : "Unavailable track",
-    track ? trackSubtitleWithDuration(track) : "",
+    track ? trackSubtitle(track, true) : "",
     playbackRequester(item)
   );
 
-  const actions = trackActionGroup([], item.dedupe_key, [
-    commandTrashButton("Remove from queue", {action: "queue_remove", queue_item_id: item.id}),
-  ]);
+  const remove = trashButton("Remove from queue", async () => {
+    await command({action: "queue_remove", queue_item_id: item.id});
+  });
+  remove.dataset.roomAction = "queue_remove";
+  remove.hidden = !canRunCommand("queue_remove");
+  const actions = trackActionGroup([], item.dedupe_key, [remove]);
 
   if (hasRoomPermission("queue_manage")) {
     li.classList.add("queue-item-draggable");
@@ -124,15 +127,6 @@ function commandIcon(action) {
   return "";
 }
 
-function commandTrashButton(label, body) {
-  const button = trashButton(label, async () => {
-    await command(body);
-  });
-  button.dataset.roomAction = body.action;
-  button.hidden = !canRunCommand(body.action);
-  return button;
-}
-
 function trashButton(label, onClick) {
   const button = document.createElement("button");
   button.className = "secondary compact icon-only trash-button";
@@ -218,7 +212,7 @@ function trackRow(track, commandSpecs, requestedBy = "", dedupeKey = track?.dedu
   const row = document.createElement("div");
   row.className = "item";
 
-  const subtitle = showDuration ? trackSubtitleWithDuration(track) : trackSubtitle(track);
+  const subtitle = trackSubtitle(track, showDuration);
   const meta = trackMeta(trackTitle(track), subtitle, requestedBy);
   const actionEl = trackActionGroup(commandSpecs, dedupeKey, extraButtons);
 
@@ -317,7 +311,7 @@ function renderSubtitle(element, subtitleText, requestedBy = "") {
 
 export {
   renderQueueItem, renderHistoryItem, playbackRequester, renderHistory, refreshPermissionControls,
-  hasRoomPermission, canRunCommand, commandButton, commandIcon, commandTrashButton, trashButton,
+  hasRoomPermission, canRunCommand, commandButton, commandIcon, trashButton,
   trackMeta, standardTrackCommands, trackActionGroup, trackRow, addToPlaylistButton,
   setPlaylistButtonContent, closePlaylistAddMenus, renderSubtitle,
   command,

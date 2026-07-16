@@ -70,7 +70,7 @@ function readConfigForm() {
 function renderMusicDirs(paths) {
   const rows = paths.length > 0 ? paths : [""];
   configMusicDirs.replaceChildren(...rows.map(renderMusicDirItem));
-  updateListRemoveButtons(configMusicDirs);
+  updateRemoveButtons(configMusicDirs, ".list-editor-remove");
 }
 
 function renderMusicDirItem(path) {
@@ -90,7 +90,7 @@ function renderMusicDirItem(path) {
 function renderBannedIPs(ips) {
   const rows = ips.length > 0 ? ips : [""];
   configBannedIPs.replaceChildren(...rows.map((ip) => renderListItem(ip, "banned-ip-input", "192.168.1.50", "Banned IP address")));
-  updateListRemoveButtons(configBannedIPs);
+  updateRemoveButtons(configBannedIPs, ".list-editor-remove");
 }
 
 function renderListItem(value, inputClass, placeholder, ariaLabel) {
@@ -114,25 +114,11 @@ function renderListItem(value, inputClass, placeholder, ariaLabel) {
   remove.addEventListener("click", () => {
     const list = row.parentElement;
     row.remove();
-    updateListRemoveButtons(list);
+    updateRemoveButtons(list, ".list-editor-remove");
   });
 
   row.append(input, remove);
   return row;
-}
-
-function addMusicDir(path = "") {
-  const row = renderMusicDirItem(path);
-  configMusicDirs.append(row);
-  updateListRemoveButtons(configMusicDirs);
-  row.querySelector(".music-dir-input").focus();
-}
-
-function addBannedIP(ip = "") {
-  const row = renderListItem(ip, "banned-ip-input", "192.168.1.50", "Banned IP address");
-  configBannedIPs.append(row);
-  updateListRemoveButtons(configBannedIPs);
-  row.querySelector(".banned-ip-input").focus();
 }
 
 function readMusicDirs() {
@@ -143,11 +129,9 @@ function readBannedIPs() {
   return [...configBannedIPs.querySelectorAll(".banned-ip-input")].map((input) => input.value.trim()).filter(Boolean);
 }
 
-function updateListRemoveButtons(container) {
-  const buttons = container.querySelectorAll(".list-editor-remove");
-  buttons.forEach((button) => {
-    button.disabled = buttons.length <= 1;
-  });
+function updateRemoveButtons(container, selector) {
+  const buttons = container.querySelectorAll(selector);
+  buttons.forEach((button) => { button.disabled = buttons.length <= 1; });
 }
 
 function listEditor(title, inputClass, values, placeholder) {
@@ -172,18 +156,18 @@ function listEditor(title, inputClass, values, placeholder) {
   add.addEventListener("click", () => {
     const row = renderListItem("", inputClass, placeholder, title);
     list.append(row);
-    updateListRemoveButtons(list);
+    updateRemoveButtons(list, ".list-editor-remove");
     row.querySelector(`.${inputClass}`).focus();
   });
 
   editor.append(head, list);
-  updateListRemoveButtons(list);
+  updateRemoveButtons(list, ".list-editor-remove");
   return editor;
 }
 
 function renderRooms(rooms) {
   roomsList.replaceChildren(...rooms.map(renderRoomRow));
-  updateRoomRemoveButtons();
+  updateRemoveButtons(roomsList, ".room-remove");
 }
 
 function renderRoomRow(room = {}) {
@@ -208,7 +192,7 @@ function renderRoomRow(room = {}) {
   remove.append(document.createElement("span"));
   remove.addEventListener("click", () => {
     row.remove();
-    updateRoomRemoveButtons();
+    updateRemoveButtons(roomsList, ".room-remove");
   });
 
   main.append(id, name);
@@ -229,13 +213,6 @@ function inputField(labelText, className, value) {
   input.autocomplete = "off";
   label.append(span, input);
   return label;
-}
-
-function updateRoomRemoveButtons() {
-  const buttons = roomsList.querySelectorAll(".room-remove");
-  buttons.forEach((button) => {
-    button.disabled = buttons.length <= 1;
-  });
 }
 
 function readRooms() {
@@ -328,16 +305,22 @@ configForm.addEventListener("submit", async (event) => {
 });
 
 addMusicDirButton.addEventListener("click", () => {
-  addMusicDir();
+  const row = renderMusicDirItem("");
+  configMusicDirs.append(row);
+  updateRemoveButtons(configMusicDirs, ".list-editor-remove");
+  row.querySelector(".music-dir-input").focus();
 });
 
 addBannedIPButton.addEventListener("click", () => {
-  addBannedIP();
+  const row = renderListItem("", "banned-ip-input", "192.168.1.50", "Banned IP address");
+  configBannedIPs.append(row);
+  updateRemoveButtons(configBannedIPs, ".list-editor-remove");
+  row.querySelector(".banned-ip-input").focus();
 });
 
 addRoomButton.addEventListener("click", () => {
   roomsList.append(renderRoomRow());
-  updateRoomRemoveButtons();
+  updateRemoveButtons(roomsList, ".room-remove");
 });
 
 rescanButton.addEventListener("click", async () => {
