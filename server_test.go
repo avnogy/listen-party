@@ -101,7 +101,7 @@ func TestAdminPageRequiresAdminCredentials(t *testing.T) {
 
 func TestEnabledUserStaticAssetsAreServed(t *testing.T) {
 	server := testServer(&Server{Auth: fakeAuth{user: UserInfo{Username: "alice"}}}).Handler()
-	for _, path := range []string{"/", "/assets/style.css", "/assets/app.js", "/assets/vendor/sortable-1.15.7.min.js"} {
+	for _, path := range []string{"/", "/assets/style.css", "/assets/api.js", "/assets/bootstrap.js", "/assets/vendor/sortable-1.15.7.min.js"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
