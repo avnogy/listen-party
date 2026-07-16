@@ -1,9 +1,8 @@
 import {appState, ui} from "./main-context.js";
-import {api} from "./api-module.js";
-import {roomAPI, recoverPlaybackClient, loadMedia, trackTitle, trackContext, renderPlaybackButton, renderVolumeControl, setSeekUI} from "./core.js";
+import {api} from "../shared/api-module.js";
+import {roomAPI, recoverPlaybackClient, loadMedia, trackTitle, trackContext, renderPlaybackButton, renderVolumeControl, setSeekUI, clearArtwork} from "./core.js";
 import {syncAudio, updateQueueSortable} from "./player.js";
 import {command, hasRoomPermission, playbackRequester, refreshPermissionControls, renderHistory, renderQueueItem} from "./queue.js";
-import {clearArtwork} from "./core.js";
 import {renderSubtitle} from "./queue.js";
 import {emptyHint} from "./playlists.js";
 const { artist: artistEl, audio, autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton, clearQueue: clearQueueButton, listenerList: listenerListEl, presence: presenceEl, previous: previousButton, queueChangesButton, queueChangesList: queueChangesListEl, queue: queueEl, skip: skipButton, togglePlayback: togglePlaybackButton, track: trackEl } = ui;

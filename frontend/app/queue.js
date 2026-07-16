@@ -1,9 +1,8 @@
 import {appState, ui} from "./main-context.js";
-import {api} from "./api-module.js";
+import {api} from "../shared/api-module.js";
 import {loadPlaylists} from "./playlists.js";
 import {trackTitle, trackSubtitle, trackSubtitleWithDuration} from "./core.js";
-import {submitQueueReorder} from "./player.js";
-import {command} from "./player.js";
+import {submitQueueReorder, command} from "./player.js";
 import {updatePlaylistActionButtons} from "./playlists.js";
 const { history: historyEl, queue: queueEl } = ui;
 // Queue, history, track rows, and queue reordering.

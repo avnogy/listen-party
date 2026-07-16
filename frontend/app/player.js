@@ -1,5 +1,5 @@
 import {appState, ui, config} from "./main-context.js";
-import {api} from "./api-module.js";
+import {api} from "../shared/api-module.js";
 import {hasRoomPermission} from "./queue.js";
 import {hasMedia, mediaDuration, playbackPosition, renderVolumeButton, roomAPI, setSeekUI, syncCurrentAudio} from "./core.js";
 import {renderState} from "./state-render.js";

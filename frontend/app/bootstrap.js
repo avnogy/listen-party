@@ -1,12 +1,11 @@
 import {appState, ui, config, storageSet} from "./main-context.js";
-import {api} from "./api-module.js";
+import {api} from "../shared/api-module.js";
 import {roomAPI, closeEvents, forceLogout, connectEvents, hasMedia, applyAudioSettings, restoreRailPreferences, restoreSearchPreferences, restoreVolumePreferences, renderPlaybackButton, renderVolumeControl, setSeekUI, volumeModeStorageKey} from "./core.js";
 import {renderState, closeAutoDJSourceMenu, renderAutoDJSourceMenu} from "./state-render.js";
 import {command, hasRoomPermission, standardTrackCommands, trackRow, closePlaylistAddMenus} from "./queue.js";
 import {initQueueSortable, updateQueueSortable} from "./player.js";
 import {loadLibraryStatus, setRailMode, closeRoomSettings, toggleRoomSettings, renderRoomSettings, readRoomSettingsGrants} from "./room.js";
-import {loadPlaylists, loadPlaylistDetail} from "./playlists.js";
-import {emptyHint} from "./playlists.js";
+import {loadPlaylists, loadPlaylistDetail, emptyHint} from "./playlists.js";
 const {defaultVolume, playlistStorageKey, minimumRoomSaveFeedbackMS, roomSaveResultVisibleMS,
   searchTextStorageKey, searchDebounceMS, searchFieldStorageKey, localVolumeStorageKey,
   localMutedStorageKey} = config;

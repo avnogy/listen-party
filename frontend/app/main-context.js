@@ -1,4 +1,4 @@
-import {dom, storageGet, storageSet} from "./api-module.js";
+import {dom, storageGet, storageSet} from "../shared/api-module.js";
 
 const ids = {
   audio:"audio", track:"track", artist:"artist", queue:"queue", history:"history", results:"results",

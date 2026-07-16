@@ -1,13 +1,13 @@
 // Admin configuration form and room editor.
-import {api, setStatus} from "/assets/api-module.js";
-import {formatRate, formatScanTime, shortPath} from "/assets/admin-format.js";
+import {api, setStatus} from "/assets/shared/api-module.js";
+import {formatRate, formatScanTime, shortPath} from "/assets/admin/admin-format.js";
 import {
   addBannedIPButton, addMusicDirButton, addRoomButton, adminState, configAddr,
   configBannedIPs, configForm, configKeycloakClientID, configKeycloakClientSecret,
   configKeycloakDisplayName, configKeycloakEnabled, configKeycloakIssuer,
   configMusicDirs, configSaveButton, configScanWorkers, configStatus, minimumSaveFeedbackMS,
   rescanButton, rescanStatus, roomsList, scanStatus,
-} from "/assets/admin-context.js";
+} from "/assets/admin/admin-context.js";
 
 let {
   scanStatusTimer, saveFeedbackTimer, roomCounter, configRevision,

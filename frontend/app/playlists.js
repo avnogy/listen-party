@@ -1,5 +1,5 @@
 import {appState, ui, config, storageSet} from "./main-context.js";
-import {api} from "./api-module.js";
+import {api} from "../shared/api-module.js";
 import {standardTrackCommands, trackRow, trashButton} from "./queue.js";
 const {playlistStorageKey} = config;
 const { deletePlaylistButton, importPlaylistFolderButton, playlistDetailEl, playlistSelect } = ui;

@@ -1,5 +1,5 @@
 import {appState, ui, config, libraryViews, storageSet} from "./main-context.js";
-import {api} from "./api-module.js";
+import {api} from "../shared/api-module.js";
 import {roomAPI} from "./core.js";
 import {loadPlaylists} from "./playlists.js";
 const {railModeStorageKey} = config;

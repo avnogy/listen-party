@@ -1,4 +1,4 @@
-import {api, storageGet} from "./api-module.js";
+import {api, storageGet} from "../shared/api-module.js";
 import {appState, config, ui} from "./main-context.js";
 import {hasRoomPermission} from "./queue.js";
 import {renderState} from "./state-render.js";
