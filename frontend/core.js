@@ -2,103 +2,70 @@
 // being loaded first; keeping this contract explicit avoids a framework or
 // build step while making ownership easy to find.
 
-const audio = document.getElementById("audio");
-const trackEl = document.getElementById("track");
-const artistEl = document.getElementById("artist");
-const queueEl = document.getElementById("queue");
-const historyEl = document.getElementById("history");
-const resultsEl = document.getElementById("results");
-const presenceEl = document.getElementById("presence");
-const presenceButton = document.getElementById("presenceButton");
-const listenerListEl = document.getElementById("listenerList");
-const clearQueueButton = document.getElementById("clearQueue");
-const autoDJButton = document.getElementById("autoDJ");
-const autoDJSourceButton = document.getElementById("autoDJSource");
-const autoDJSourceMenu = document.getElementById("autoDJSourceMenu");
-const clearHistoryButton = document.getElementById("clearHistory");
-const previousButton = document.getElementById("previous");
-const skipButton = document.getElementById("skip");
-const togglePlaybackButton = document.getElementById("togglePlayback");
-const artworkEl = document.getElementById("artwork");
-const seekInput = document.getElementById("seek");
-const elapsedEl = document.getElementById("elapsed");
-const durationEl = document.getElementById("duration");
-const muteButton = document.getElementById("mute");
-const volumeInput = document.getElementById("volume");
-const volumeModeButton = document.getElementById("volumeMode");
-const queueChangesButton = document.getElementById("queueChangesButton");
-const queueChangesListEl = document.getElementById("queueChangesList");
-const searchInput = document.getElementById("q");
-const searchField = document.getElementById("searchField");
-const libraryStatus = document.getElementById("libraryStatus");
-const libraryTab = document.getElementById("libraryTab");
-const playlistsTab = document.getElementById("playlistsTab");
-const libraryPanel = document.getElementById("libraryPanel");
-const libraryViews = document.querySelectorAll(".library-view");
-const playlistsView = document.getElementById("playlistsView");
-const playlistSelect = document.getElementById("playlistSelect");
-const deletePlaylistButton = document.getElementById("deletePlaylist");
-const playlistDetailEl = document.getElementById("playlistDetail");
-const newPlaylistButton = document.getElementById("newPlaylist");
-const playlistCreatePanel = document.getElementById("playlistCreatePanel");
-const playlistCreateForm = document.getElementById("playlistCreateForm");
-const playlistNameInput = document.getElementById("playlistName");
-const importPlaylistFolderButton = document.getElementById("importPlaylistFolder");
-const playlistFolderInput = document.getElementById("playlistFolderInput");
-const playlistImportStatus = document.getElementById("playlistImportStatus");
-const roomSettingsView = document.getElementById("roomSettingsView");
-const roomSettingsGrants = document.getElementById("roomSettingsGrants");
-const roomSettingsStatus = document.getElementById("roomSettingsStatus");
-const saveRoomSettingsButton = document.getElementById("saveRoomSettings");
-const roomSettingsButton = document.getElementById("roomSettingsButton");
-const closeRoomSettingsButton = document.getElementById("closeRoomSettings");
-const currentUserEl = document.getElementById("currentUser");
-const roomSelect = document.getElementById("roomSelect");
-const logoutForm = document.getElementById("logoutForm");
-const defaultVolume = 0.25;
-const syncToleranceSeconds = 0.3;
-const searchDebounceMS = 300;
-const searchTextStorageKey = "listen-party.searchText";
-const searchFieldStorageKey = "listen-party.searchField";
-const railModeStorageKey = "listen-party.railMode";
-const playlistStorageKey = "listen-party.selectedPlaylist";
-const localVolumeStorageKey = "listen-party.localVolume";
-const localMutedStorageKey = "listen-party.localMuted";
-const minimumRoomSaveFeedbackMS = 450;
-const roomSaveResultVisibleMS = 1400;
-const recoveryStorageKey = "listen-party.playbackRecoveryAt";
-const recoveryCooldownMS = 30000;
+const ui = Object.fromEntries(Object.entries({
+  audio: "audio", track: "track", artist: "artist", queue: "queue", history: "history", results: "results",
+  presence: "presence", presenceButton: "presenceButton", listenerList: "listenerList", clearQueue: "clearQueue",
+  autoDJ: "autoDJ", autoDJSource: "autoDJSource", autoDJSourceMenu: "autoDJSourceMenu", clearHistory: "clearHistory",
+  previous: "previous", skip: "skip", togglePlayback: "togglePlayback", artwork: "artwork", seek: "seek",
+  elapsed: "elapsed", duration: "duration", mute: "mute", volume: "volume", volumeMode: "volumeMode",
+  queueChangesButton: "queueChangesButton", queueChangesList: "queueChangesList", searchInput: "q",
+  searchField: "searchField", libraryStatus: "libraryStatus", libraryTab: "libraryTab", playlistsTab: "playlistsTab",
+  libraryPanel: "libraryPanel", playlistsView: "playlistsView", playlistSelect: "playlistSelect",
+  deletePlaylistButton: "deletePlaylist", playlistDetailEl: "playlistDetail", newPlaylistButton: "newPlaylist",
+  playlistCreatePanel: "playlistCreatePanel", playlistCreateForm: "playlistCreateForm", playlistNameInput: "playlistName",
+  importPlaylistFolderButton: "importPlaylistFolder", playlistFolderInput: "playlistFolderInput",
+  playlistImportStatus: "playlistImportStatus", roomSettingsView: "roomSettingsView", roomSettingsGrants: "roomSettingsGrants",
+  roomSettingsStatus: "roomSettingsStatus", saveRoomSettingsButton: "saveRoomSettings", roomSettingsButton: "roomSettingsButton",
+  closeRoomSettingsButton: "closeRoomSettings", currentUserEl: "currentUser", roomSelect: "roomSelect", logoutForm: "logoutForm",
+}).map(([name, id]) => [name, dom.id(id)]));
 
-let lastState = null;
-let lastStateReceivedAt = 0;
-let searchTimer = 0;
-let seeking = false;
-let events = null;
-let playlists = [];
-let selectedPlaylistID = 0;
-let currentPermissions = new Set();
-let queueSortable = null;
-let queueDragActive = false;
-let queueReorderPending = false;
-let pendingQueueState = null;
-let canAdministerCurrentRoom = false;
-let roomSaveFeedbackTimer = 0;
-let volumeMode = "local";
-let localVolume = 0;
-let localMuted = false;
+const {
+  audio, track: trackEl, artist: artistEl, queue: queueEl, history: historyEl, results: resultsEl,
+  presence: presenceEl, presenceButton, listenerList: listenerListEl, clearQueue: clearQueueButton,
+  autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton,
+  previous: previousButton, skip: skipButton, togglePlayback: togglePlaybackButton, artwork: artworkEl,
+  seek: seekInput, elapsed: elapsedEl, duration: durationEl, mute: muteButton, volume: volumeInput,
+  volumeMode: volumeModeButton, queueChangesButton, queueChangesList: queueChangesListEl,
+  searchInput, searchField, libraryStatus, libraryTab, playlistsTab, libraryPanel, playlistsView,
+  playlistSelect, deletePlaylistButton, playlistDetailEl, newPlaylistButton, playlistCreatePanel,
+  playlistCreateForm, playlistNameInput, importPlaylistFolderButton, playlistFolderInput,
+  playlistImportStatus, roomSettingsView, roomSettingsGrants, roomSettingsStatus, saveRoomSettingsButton,
+  roomSettingsButton, closeRoomSettingsButton, currentUserEl, roomSelect, logoutForm,
+} = ui;
+const libraryViews = dom.all(".library-view");
+const config = Object.freeze({
+  defaultVolume: 0.25,
+  syncToleranceSeconds: 0.3,
+  searchDebounceMS: 300,
+  searchTextStorageKey: "listen-party.searchText",
+  searchFieldStorageKey: "listen-party.searchField",
+  railModeStorageKey: "listen-party.railMode",
+  playlistStorageKey: "listen-party.selectedPlaylist",
+  localVolumeStorageKey: "listen-party.localVolume",
+  localMutedStorageKey: "listen-party.localMuted",
+  minimumRoomSaveFeedbackMS: 450,
+  roomSaveResultVisibleMS: 1400,
+  recoveryStorageKey: "listen-party.playbackRecoveryAt",
+  recoveryCooldownMS: 30000,
+});
+for (const [key, value] of Object.entries(config)) {
+  Object.defineProperty(globalThis, key, {configurable: true, get: () => value});
+}
 
-let currentRoomID = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
+const appState = {
+  lastState: null, lastStateReceivedAt: 0, searchTimer: 0, seeking: false, events: null,
+  playlists: [], selectedPlaylistID: 0, currentPermissions: new Set(), queueSortable: null,
+  queueDragActive: false, queueReorderPending: false, pendingQueueState: null,
+  canAdministerCurrentRoom: false, roomSaveFeedbackTimer: 0, volumeMode: "local",
+  localVolume: 0, localMuted: false,
+  currentRoomID: decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || ""),
+};
+for (const key of Object.keys(appState)) {
+  Object.defineProperty(globalThis, key, {configurable: true, get: () => appState[key], set: (value) => { appState[key] = value; }});
+}
 
 function roomAPI(path) {
   return `/rooms/${encodeURIComponent(currentRoomID)}${path}`;
-}
-
-function storageGet(key) {
-  try { return localStorage.getItem(key) || ""; } catch { return ""; }
-}
-
-function storageSet(key, value) {
-  try { localStorage.setItem(key, String(value)); } catch {}
 }
 
 function restoreSearchPreferences() {

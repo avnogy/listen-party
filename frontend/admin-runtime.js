@@ -25,11 +25,6 @@ let roomCounter = 1;
 let configRevision = 0;
 const minimumSaveFeedbackMS = 350;
 
-function setStatus(message, kind = "") {
-  configStatus.textContent = message;
-  configStatus.dataset.kind = kind;
-}
-
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -268,29 +263,19 @@ function cloneGrants(grants) {
   return Object.fromEntries(Object.entries(grants || {}).map(([group, permissions]) => [group, [...permissions]]));
 }
 
-async function api(path, options = {}) {
-  const res = await fetch(path, {
-    headers: {"Content-Type": "application/json"},
-    ...options,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 async function loadConfig() {
-  setStatus("Loading...", "working");
+  setStatus(configStatus, "Loading...", "working");
   try {
     renderConfig(await api("/api/admin/config"));
-    setStatus("Loaded", "ok");
+    setStatus(configStatus, "Loaded", "ok");
   } catch (err) {
-    setStatus("Could not load config", "error");
+    setStatus(configStatus, "Could not load config", "error");
     console.error(err);
   }
 }
 
 function setRescanStatus(message, kind = "") {
-  rescanStatus.textContent = message;
-  rescanStatus.dataset.kind = kind;
+  setStatus(rescanStatus, message, kind);
 }
 
 function formatScanTime(value) {
@@ -309,20 +294,17 @@ function shortPath(path) {
 
 function renderScanStatus(scan) {
   if (!scan) {
-    scanStatus.textContent = "";
-    scanStatus.dataset.kind = "";
+    setStatus(scanStatus, "");
     return false;
   }
   if (scan.scanning) {
     const roots = scan.roots || [];
     const scope = roots.length === 1 ? `Scanning ${shortPath(roots[0])}` : `Scanning ${roots.length || 0} folders`;
-    scanStatus.textContent = `${scope}: ${scan.mp3_seen || 0} seen, ${scan.indexed || 0} indexed, ${scan.unchanged || 0} unchanged, ${formatRate(scan.recent_tracks_per_sec)} recent`;
-    scanStatus.dataset.kind = "working";
+    setStatus(scanStatus, `${scope}: ${scan.mp3_seen || 0} seen, ${scan.indexed || 0} indexed, ${scan.unchanged || 0} unchanged, ${formatRate(scan.recent_tracks_per_sec)} recent`, "working");
     return true;
   }
   const base = formatScanTime(scan.last_completed);
-  scanStatus.textContent = scan.last_error ? `${base}; last scan failed` : base;
-  scanStatus.dataset.kind = scan.last_error ? "error" : "ok";
+  setStatus(scanStatus, scan.last_error ? `${base}; last scan failed` : base, scan.last_error ? "error" : "ok");
   return false;
 }
 
@@ -336,8 +318,7 @@ async function loadLibraryStatus() {
       }, 2000);
     }
   } catch (err) {
-    scanStatus.textContent = "Scan status unavailable";
-    scanStatus.dataset.kind = "error";
+    setStatus(scanStatus, "Scan status unavailable", "error");
     console.error(err);
   }
 }
