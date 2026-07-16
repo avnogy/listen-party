@@ -1,71 +1,19 @@
-// Shared page state and small helpers. Feature files below rely on this file
-// being loaded first; keeping this contract explicit avoids a framework or
-// build step while making ownership easy to find.
-
-const ui = Object.fromEntries(Object.entries({
-  audio: "audio", track: "track", artist: "artist", queue: "queue", history: "history", results: "results",
-  presence: "presence", presenceButton: "presenceButton", listenerList: "listenerList", clearQueue: "clearQueue",
-  autoDJ: "autoDJ", autoDJSource: "autoDJSource", autoDJSourceMenu: "autoDJSourceMenu", clearHistory: "clearHistory",
-  previous: "previous", skip: "skip", togglePlayback: "togglePlayback", artwork: "artwork", seek: "seek",
-  elapsed: "elapsed", duration: "duration", mute: "mute", volume: "volume", volumeMode: "volumeMode",
-  queueChangesButton: "queueChangesButton", queueChangesList: "queueChangesList", searchInput: "q",
-  searchField: "searchField", libraryStatus: "libraryStatus", libraryTab: "libraryTab", playlistsTab: "playlistsTab",
-  libraryPanel: "libraryPanel", playlistsView: "playlistsView", playlistSelect: "playlistSelect",
-  deletePlaylistButton: "deletePlaylist", playlistDetailEl: "playlistDetail", newPlaylistButton: "newPlaylist",
-  playlistCreatePanel: "playlistCreatePanel", playlistCreateForm: "playlistCreateForm", playlistNameInput: "playlistName",
-  importPlaylistFolderButton: "importPlaylistFolder", playlistFolderInput: "playlistFolderInput",
-  playlistImportStatus: "playlistImportStatus", roomSettingsView: "roomSettingsView", roomSettingsGrants: "roomSettingsGrants",
-  roomSettingsStatus: "roomSettingsStatus", saveRoomSettingsButton: "saveRoomSettings", roomSettingsButton: "roomSettingsButton",
-  closeRoomSettingsButton: "closeRoomSettings", currentUserEl: "currentUser", roomSelect: "roomSelect", logoutForm: "logoutForm",
-}).map(([name, id]) => [name, dom.id(id)]));
-
-const {
-  audio, track: trackEl, artist: artistEl, queue: queueEl, history: historyEl, results: resultsEl,
-  presence: presenceEl, presenceButton, listenerList: listenerListEl, clearQueue: clearQueueButton,
-  autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton,
-  previous: previousButton, skip: skipButton, togglePlayback: togglePlaybackButton, artwork: artworkEl,
+import {api, storageGet} from "./api-module.js";
+import {appState, config, ui} from "./main-context.js";
+import {hasRoomPermission} from "./queue.js";
+import {renderState} from "./state-render.js";
+import {setRailMode} from "./room.js";
+import {syncAudio} from "./player.js";
+const {defaultVolume, railModeStorageKey, searchTextStorageKey, searchFieldStorageKey,
+  playlistStorageKey, localVolumeStorageKey, localMutedStorageKey, recoveryStorageKey,
+  recoveryCooldownMS} = config;
+const {audio, togglePlayback: togglePlaybackButton, artwork: artworkEl,
   seek: seekInput, elapsed: elapsedEl, duration: durationEl, mute: muteButton, volume: volumeInput,
-  volumeMode: volumeModeButton, queueChangesButton, queueChangesList: queueChangesListEl,
-  searchInput, searchField, libraryStatus, libraryTab, playlistsTab, libraryPanel, playlistsView,
-  playlistSelect, deletePlaylistButton, playlistDetailEl, newPlaylistButton, playlistCreatePanel,
-  playlistCreateForm, playlistNameInput, importPlaylistFolderButton, playlistFolderInput,
-  playlistImportStatus, roomSettingsView, roomSettingsGrants, roomSettingsStatus, saveRoomSettingsButton,
-  roomSettingsButton, closeRoomSettingsButton, currentUserEl, roomSelect, logoutForm,
-} = ui;
-const libraryViews = dom.all(".library-view");
-const config = Object.freeze({
-  defaultVolume: 0.25,
-  syncToleranceSeconds: 0.3,
-  searchDebounceMS: 300,
-  searchTextStorageKey: "listen-party.searchText",
-  searchFieldStorageKey: "listen-party.searchField",
-  railModeStorageKey: "listen-party.railMode",
-  playlistStorageKey: "listen-party.selectedPlaylist",
-  localVolumeStorageKey: "listen-party.localVolume",
-  localMutedStorageKey: "listen-party.localMuted",
-  minimumRoomSaveFeedbackMS: 450,
-  roomSaveResultVisibleMS: 1400,
-  recoveryStorageKey: "listen-party.playbackRecoveryAt",
-  recoveryCooldownMS: 30000,
-});
-for (const [key, value] of Object.entries(config)) {
-  Object.defineProperty(globalThis, key, {configurable: true, get: () => value});
-}
-
-const appState = {
-  lastState: null, lastStateReceivedAt: 0, searchTimer: 0, seeking: false, events: null,
-  playlists: [], selectedPlaylistID: 0, currentPermissions: new Set(), queueSortable: null,
-  queueDragActive: false, queueReorderPending: false, pendingQueueState: null,
-  canAdministerCurrentRoom: false, roomSaveFeedbackTimer: 0, volumeMode: "local",
-  localVolume: 0, localMuted: false,
-  currentRoomID: decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || ""),
-};
-for (const key of Object.keys(appState)) {
-  Object.defineProperty(globalThis, key, {configurable: true, get: () => appState[key], set: (value) => { appState[key] = value; }});
-}
+  volumeMode: volumeModeButton, searchInput, searchField, libraryStatus,
+  } = ui;
 
 function roomAPI(path) {
-  return `/rooms/${encodeURIComponent(currentRoomID)}${path}`;
+  return `/rooms/${encodeURIComponent(appState.currentRoomID)}${path}`;
 }
 
 function restoreSearchPreferences() {
@@ -78,14 +26,14 @@ function restoreSearchPreferences() {
 
 function restoreRailPreferences() {
   const storedPlaylistID = Number(storageGet(playlistStorageKey));
-  selectedPlaylistID = Number.isInteger(storedPlaylistID) && storedPlaylistID > 0 ? storedPlaylistID : 0;
+  appState.selectedPlaylistID = Number.isInteger(storedPlaylistID) && storedPlaylistID > 0 ? storedPlaylistID : 0;
   const mode = storageGet(railModeStorageKey) === "playlists" ? "playlists" : "library";
   setRailMode(mode, {load: false, persist: false});
 }
 
 function closeEvents() {
-  events?.close();
-  events = null;
+  appState.events?.close();
+  appState.events = null;
 }
 
 function forceLogout() {
@@ -98,24 +46,24 @@ function forceLogout() {
 
 function connectEvents() {
   closeEvents();
-  const roomID = currentRoomID;
-  events = new EventSource(`/rooms/${encodeURIComponent(roomID)}/events`);
-  events.addEventListener("state", (event) => {
-    if (roomID !== currentRoomID) return;
+  const roomID = appState.currentRoomID;
+  appState.events = new EventSource(`/rooms/${encodeURIComponent(roomID)}/events`);
+  appState.events.addEventListener("state", (event) => {
+    if (roomID !== appState.currentRoomID) return;
     try {
       renderState(JSON.parse(event.data));
     } catch (err) {
       recoverPlaybackClient("invalid playback state", err);
     }
   });
-  events.addEventListener("disconnect", () => {
-    if (roomID !== currentRoomID) return;
+  appState.events.addEventListener("disconnect", () => {
+    if (roomID !== appState.currentRoomID) return;
     forceLogout();
   });
-  events.addEventListener("error", async () => {
+  appState.events.addEventListener("error", async () => {
     try {
       const info = await api("/api/session");
-      if (roomID === currentRoomID && info.disconnected?.[roomID]) forceLogout();
+      if (roomID === appState.currentRoomID && info.disconnected?.[roomID]) forceLogout();
     } catch {
       // A network outage is not an administrative disconnect.
     }
@@ -158,8 +106,8 @@ function loadMedia(track) {
 }
 
 function syncCurrentAudio() {
-  if (lastState && hasMedia()) {
-    syncAudio(lastState);
+  if (appState.lastState && hasMedia()) {
+    syncAudio(appState.lastState);
   }
 }
 
@@ -194,7 +142,7 @@ function mediaDuration() {
   if (Number.isFinite(audio.duration) && audio.duration > 0) {
     return audio.duration;
   }
-  const indexedMS = lastState?.current?.track?.duration_ms || 0;
+  const indexedMS = appState.lastState?.current?.track?.duration_ms || 0;
   return indexedMS > 0 ? indexedMS / 1000 : 0;
 }
 
@@ -204,10 +152,10 @@ function setSeekUI(position) {
   const value = Math.min(position, max);
   seekInput.max = String(Math.ceil(max));
   seekInput.disabled = !hasMedia() || !hasRoomPermission("playback_control");
-  if (!seeking) {
+  if (!appState.seeking) {
     seekInput.value = String(value);
   }
-  elapsedEl.textContent = formatTime(seeking ? Number(seekInput.value) : value);
+  elapsedEl.textContent = formatTime(appState.seeking ? Number(seekInput.value) : value);
   durationEl.textContent = formatTime(duration);
 }
 
@@ -220,7 +168,7 @@ function playbackPosition(state) {
   }
   const serverNow = Date.parse(state.server_time);
   const startedAt = Date.parse(state.started_at);
-  const localElapsed = Math.max(0, Date.now() - lastStateReceivedAt);
+  const localElapsed = Math.max(0, Date.now() - appState.lastStateReceivedAt);
   return Math.max(0, (serverNow - startedAt + localElapsed) / 1000);
 }
 
@@ -246,27 +194,27 @@ function applyAudioSettings(value, muted) {
 }
 
 function volumeModeStorageKey() {
-  return `listen-party.volumeMode.${currentRoomID || "default"}`;
+  return `listen-party.volumeMode.${appState.currentRoomID || "default"}`;
 }
 
 function restoreVolumePreferences() {
   const storedVolume = Number(storageGet(localVolumeStorageKey));
-  localVolume = Number.isFinite(storedVolume) ? Math.max(0, Math.min(Number(volumeInput.max), storedVolume)) : 0;
-  localMuted = storageGet(localMutedStorageKey) === "true";
-  volumeMode = storageGet(volumeModeStorageKey()) === "room" ? "room" : "local";
+  appState.localVolume = Number.isFinite(storedVolume) ? Math.max(0, Math.min(Number(volumeInput.max), storedVolume)) : 0;
+  appState.localMuted = storageGet(localMutedStorageKey) === "true";
+  appState.volumeMode = storageGet(volumeModeStorageKey()) === "room" ? "room" : "local";
   renderVolumeControl();
 }
 
 function renderVolumeControl() {
-  const roomMode = volumeMode === "room";
-  const roomAudio = lastState?.room_audio || {volume: defaultVolume, muted: false};
+  const roomMode = appState.volumeMode === "room";
+  const roomAudio = appState.lastState?.room_audio || {volume: defaultVolume, muted: false};
   const canControlRoomVolume = hasRoomPermission("volume_control");
   volumeModeButton.textContent = roomMode ? "Room" : "Local";
   volumeModeButton.setAttribute("aria-pressed", String(roomMode));
   volumeModeButton.title = roomMode ? "Use local volume" : "Use room volume";
   volumeInput.disabled = roomMode && !canControlRoomVolume;
   muteButton.disabled = roomMode && !canControlRoomVolume;
-  applyAudioSettings(roomMode ? roomAudio.volume : localVolume, roomMode ? roomAudio.muted : localMuted);
+  applyAudioSettings(roomMode ? roomAudio.volume : appState.localVolume, roomMode ? roomAudio.muted : appState.localMuted);
 }
 
 function clearArtwork() {
@@ -278,6 +226,15 @@ function loadArtwork(track) {
   artworkEl.hidden = true;
   artworkEl.src = mediaURL(track, "/artwork");
 }
+
+export {
+  roomAPI, restoreSearchPreferences, restoreRailPreferences, closeEvents, forceLogout,
+  connectEvents, recoverPlaybackClient, hasMedia, mediaURL, loadMedia, syncCurrentAudio,
+  trackTitle, trackContext, trackSubtitle, trackSubtitleWithDuration, formatTime,
+  mediaDuration, setSeekUI, playbackPosition, renderPlaybackButton, renderVolumeButton,
+  applyAudioSettings, volumeModeStorageKey, restoreVolumePreferences, renderVolumeControl,
+  clearArtwork, loadArtwork,
+};
 
 artworkEl.addEventListener("load", () => {
   artworkEl.hidden = false;

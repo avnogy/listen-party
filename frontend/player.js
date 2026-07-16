@@ -1,3 +1,10 @@
+import {appState, ui, config} from "./main-context.js";
+import {api} from "./api-module.js";
+import {hasRoomPermission} from "./queue.js";
+import {hasMedia, mediaDuration, playbackPosition, renderVolumeButton, roomAPI, setSeekUI, syncCurrentAudio} from "./core.js";
+import {renderState} from "./state-render.js";
+const {syncToleranceSeconds} = config;
+const { audio, queue: queueEl } = ui;
 // Player controls, audio synchronization, and queue drag/drop setup.
 
 function initQueueSortable() {
@@ -5,7 +12,7 @@ function initQueueSortable() {
     throw new Error("embedded SortableJS asset did not load");
   }
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  queueSortable = Sortable.create(queueEl, {
+  appState.queueSortable = Sortable.create(queueEl, {
     animation: reduceMotion ? 0 : 160,
     easing: "cubic-bezier(0.2, 0, 0, 1)",
     handle: ".queue-drag-handle",
@@ -21,12 +28,12 @@ function initQueueSortable() {
     delayOnTouchOnly: true,
     touchStartThreshold: 4,
     onStart() {
-      queueDragActive = true;
-      pendingQueueState = null;
+      appState.queueDragActive = true;
+      appState.pendingQueueState = null;
       queueEl.classList.add("queue-dragging");
     },
     onEnd(event) {
-      queueDragActive = false;
+      appState.queueDragActive = false;
       queueEl.classList.remove("queue-dragging");
       if (event.oldDraggableIndex === event.newDraggableIndex) {
         applyPendingQueueState();
@@ -42,21 +49,21 @@ function initQueueSortable() {
 }
 
 function updateQueueSortable() {
-  if (!queueSortable) return;
-  const enabled = hasRoomPermission("queue_manage") && !queueReorderPending;
-  queueSortable.option("disabled", !enabled);
+  if (!appState.queueSortable) return;
+  const enabled = hasRoomPermission("queue_manage") && !appState.queueReorderPending;
+  appState.queueSortable.option("disabled", !enabled);
   queueEl.classList.toggle("queue-sortable-enabled", enabled);
 }
 
 function applyPendingQueueState() {
-  const state = pendingQueueState;
-  pendingQueueState = null;
+  const state = appState.pendingQueueState;
+  appState.pendingQueueState = null;
   if (state) renderState(state);
 }
 
 async function submitQueueReorder(queueItemID, beforeQueueItemID) {
-  if (queueReorderPending || !hasRoomPermission("queue_manage")) return;
-  queueReorderPending = true;
+  if (appState.queueReorderPending || !hasRoomPermission("queue_manage")) return;
+  appState.queueReorderPending = true;
   updateQueueSortable();
   try {
     const state = await api(roomAPI("/api/command"), {
@@ -67,13 +74,13 @@ async function submitQueueReorder(queueItemID, beforeQueueItemID) {
         before_queue_item_id: beforeQueueItemID,
       }),
     });
-    queueReorderPending = false;
+    appState.queueReorderPending = false;
     renderState(state);
     applyPendingQueueState();
   } catch (err) {
     console.error(err);
-    queueReorderPending = false;
-    pendingQueueState = null;
+    appState.queueReorderPending = false;
+    appState.pendingQueueState = null;
     try {
       renderState(await api(roomAPI("/api/state")));
     } catch (refreshErr) {
@@ -140,6 +147,8 @@ function syncAudio(state, correctTime = true) {
   setSeekUI(audio.readyState >= HTMLMediaElement.HAVE_METADATA ? audio.currentTime : target);
 }
 
+export {initQueueSortable, updateQueueSortable, applyPendingQueueState, submitQueueReorder, command, setSyncedTime, playAudio, syncAudio};
+
 for (const eventName of ["loadedmetadata", "canplay"]) {
   audio.addEventListener(eventName, syncCurrentAudio);
 }
@@ -149,7 +158,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 audio.addEventListener("timeupdate", () => {
-  if (!seeking && hasMedia()) {
+  if (!appState.seeking && hasMedia()) {
     setSeekUI(audio.currentTime);
   }
 });

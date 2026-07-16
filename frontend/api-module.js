@@ -1,7 +1,6 @@
-// Shared browser helpers. Kept as a classic script so feature files need no
-// bundler or module system.
+// Explicit API and browser utility module used by the admin entrypoint.
 
-const dom = {
+export const dom = {
   id(id) {
     return document.getElementById(id);
   },
@@ -32,12 +31,12 @@ const dom = {
   },
 };
 
-function setStatus(element, message, kind = "") {
+export function setStatus(element, message, kind = "") {
   element.textContent = message;
   element.dataset.kind = kind;
 }
 
-function storageGet(key, fallback = "") {
+export function storageGet(key, fallback = "") {
   try {
     return localStorage.getItem(key) ?? fallback;
   } catch {
@@ -45,7 +44,7 @@ function storageGet(key, fallback = "") {
   }
 }
 
-function storageSet(key, value) {
+export function storageSet(key, value) {
   try {
     localStorage.setItem(key, String(value));
   } catch {
@@ -53,7 +52,7 @@ function storageSet(key, value) {
   }
 }
 
-async function api(path, options = {}) {
+export async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: {"Content-Type": "application/json", ...(options.headers || {})},

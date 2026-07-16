@@ -1,3 +1,11 @@
+import {appState, ui} from "./main-context.js";
+import {api} from "./api-module.js";
+import {loadPlaylists} from "./playlists.js";
+import {trackTitle, trackSubtitle, trackSubtitleWithDuration} from "./core.js";
+import {submitQueueReorder} from "./player.js";
+import {command} from "./player.js";
+import {updatePlaylistActionButtons} from "./playlists.js";
+const { history: historyEl, queue: queueEl } = ui;
 // Queue, history, track rows, and queue reordering.
 
 function renderQueueItem(item) {
@@ -42,7 +50,7 @@ function queueDragHandle(item) {
 }
 
 function handleQueueReorderKey(event, queueItemID) {
-  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key) || queueReorderPending) return;
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key) || appState.queueReorderPending) return;
   const item = event.currentTarget.closest(".queue-item");
   if (!item) return;
   let before = null;
@@ -158,7 +166,7 @@ function updateRowActionLayout(actions) {
 }
 
 function hasRoomPermission(permission) {
-  return currentPermissions.has(permission);
+  return appState.currentPermissions.has(permission);
 }
 
 function canRunCommand(action) {
@@ -220,7 +228,7 @@ function trackRow(track, commandSpecs, requestedBy = "", dedupeKey = track?.dedu
 }
 
 function addToPlaylistButton(dedupeKey) {
-  const editable = playlists.filter((playlist) => playlist.can_edit);
+  const editable = appState.playlists.filter((playlist) => playlist.can_edit);
   const wrap = document.createElement("div");
   wrap.className = "playlist-add-menu";
   const button = document.createElement("button");
@@ -307,3 +315,11 @@ function renderSubtitle(element, subtitleText, requestedBy = "") {
   requester.textContent = requestedBy;
   element.append(requester);
 }
+
+export {
+  renderQueueItem, renderHistoryItem, playbackRequester, renderHistory, refreshPermissionControls,
+  hasRoomPermission, canRunCommand, commandButton, commandIcon, commandTrashButton, trashButton,
+  trackMeta, standardTrackCommands, trackActionGroup, trackRow, addToPlaylistButton,
+  setPlaylistButtonContent, closePlaylistAddMenus, renderSubtitle,
+  command,
+};

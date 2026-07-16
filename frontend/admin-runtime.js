@@ -1,29 +1,17 @@
 // Admin configuration form and room editor.
+import {api, setStatus} from "/assets/api-module.js";
+import {formatRate, formatScanTime, shortPath} from "/assets/admin-format.js";
+import {
+  addBannedIPButton, addMusicDirButton, addRoomButton, adminState, configAddr,
+  configBannedIPs, configForm, configKeycloakClientID, configKeycloakClientSecret,
+  configKeycloakDisplayName, configKeycloakEnabled, configKeycloakIssuer,
+  configMusicDirs, configSaveButton, configScanWorkers, configStatus, minimumSaveFeedbackMS,
+  rescanButton, rescanStatus, roomsList, scanStatus,
+} from "/assets/admin-context.js";
 
-const configStatus = document.getElementById("configStatus");
-const configForm = document.getElementById("configForm");
-const configSaveButton = document.getElementById("configSave");
-const configAddr = document.getElementById("configAddr");
-const configMusicDirs = document.getElementById("configMusicDirs");
-const configBannedIPs = document.getElementById("configBannedIPs");
-const configScanWorkers = document.getElementById("configScanWorkers");
-const configKeycloakEnabled = document.getElementById("configKeycloakEnabled");
-const configKeycloakIssuer = document.getElementById("configKeycloakIssuer");
-const configKeycloakClientID = document.getElementById("configKeycloakClientID");
-const configKeycloakClientSecret = document.getElementById("configKeycloakClientSecret");
-const configKeycloakDisplayName = document.getElementById("configKeycloakDisplayName");
-const addMusicDirButton = document.getElementById("addMusicDir");
-const addBannedIPButton = document.getElementById("addBannedIP");
-const addRoomButton = document.getElementById("addRoom");
-const roomsList = document.getElementById("roomsList");
-const rescanButton = document.getElementById("rescan");
-const rescanStatus = document.getElementById("rescanStatus");
-const scanStatus = document.getElementById("scanStatus");
-let scanStatusTimer = 0;
-let saveFeedbackTimer = 0;
-let roomCounter = 1;
-let configRevision = 0;
-const minimumSaveFeedbackMS = 350;
+let {
+  scanStatusTimer, saveFeedbackTimer, roomCounter, configRevision,
+} = adminState;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -278,20 +266,6 @@ function setRescanStatus(message, kind = "") {
   setStatus(rescanStatus, message, kind);
 }
 
-function formatScanTime(value) {
-  if (!value || value === "0001-01-01T00:00:00Z") return "Never rescanned";
-  return `Last rescanned ${new Date(value).toLocaleString()}`;
-}
-
-function formatRate(value) {
-  if (!Number.isFinite(value)) return "0/s";
-  return `${value.toFixed(value >= 10 ? 0 : 1)}/s`;
-}
-
-function shortPath(path) {
-  return (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-}
-
 function renderScanStatus(scan) {
   if (!scan) {
     setStatus(scanStatus, "");
@@ -330,7 +304,7 @@ configForm.addEventListener("submit", async (event) => {
   configSaveButton.disabled = true;
   configSaveButton.textContent = "Saving...";
   configSaveButton.dataset.state = "working";
-  setStatus("Saving...", "working");
+  setStatus(configStatus, "Saving...", "working");
   try {
     const saveRequest = api("/api/admin/config", {
       method: "PUT",
@@ -339,11 +313,11 @@ configForm.addEventListener("submit", async (event) => {
     const [result] = await Promise.all([saveRequest, delay(minimumSaveFeedbackMS)]);
     if (result.error) throw result.error;
     renderConfig(result.value);
-    setStatus("Saved", "ok");
+    setStatus(configStatus, "Saved", "ok");
     configSaveButton.textContent = "Saved";
     configSaveButton.dataset.state = "saved";
   } catch (err) {
-    setStatus((err.message || "Save failed").trim(), "error");
+    setStatus(configStatus, (err.message || "Save failed").trim(), "error");
     configSaveButton.textContent = "Save failed";
     configSaveButton.dataset.state = "error";
     console.error(err);

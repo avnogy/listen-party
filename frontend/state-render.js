@@ -1,3 +1,12 @@
+import {appState, ui} from "./main-context.js";
+import {api} from "./api-module.js";
+import {roomAPI, recoverPlaybackClient, loadMedia, trackTitle, trackContext, renderPlaybackButton, renderVolumeControl, setSeekUI} from "./core.js";
+import {syncAudio, updateQueueSortable} from "./player.js";
+import {command, hasRoomPermission, playbackRequester, refreshPermissionControls, renderHistory, renderQueueItem} from "./queue.js";
+import {clearArtwork} from "./core.js";
+import {renderSubtitle} from "./queue.js";
+import {emptyHint} from "./playlists.js";
+const { artist: artistEl, audio, autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton, clearQueue: clearQueueButton, listenerList: listenerListEl, presence: presenceEl, previous: previousButton, queueChangesButton, queueChangesList: queueChangesListEl, queue: queueEl, skip: skipButton, togglePlayback: togglePlaybackButton, track: trackEl } = ui;
 // Playback state rendering and live presence.
 
 function samePlaybackTimeline(a, b) {
@@ -15,40 +24,40 @@ function renderState(state) {
     recoverPlaybackClient("malformed playback state");
     return;
   }
-  if (state.room_id && currentRoomID && state.room_id !== currentRoomID) {
+  if (state.room_id && appState.currentRoomID && state.room_id !== appState.currentRoomID) {
     return;
   }
-  if (lastState) {
-    if (state.generation !== lastState.generation) {
+  if (appState.lastState) {
+    if (state.generation !== appState.lastState.generation) {
       // A backend restart has a new generation. Reopen the media stream and
       // render the restored state directly instead of reloading the page.
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
       clearArtwork();
-      lastState = null;
-      lastStateReceivedAt = 0;
-      pendingQueueState = null;
+      appState.lastState = null;
+      appState.lastStateReceivedAt = 0;
+      appState.pendingQueueState = null;
     } else {
-      const lastRevision = Number(lastState.revision);
-      const lastServerTime = Date.parse(lastState.server_time);
+      const lastRevision = Number(appState.lastState.revision);
+      const lastServerTime = Date.parse(appState.lastState.server_time);
       if (revision < lastRevision) return;
       if (revision === lastRevision && serverTime < lastServerTime) return;
     }
   }
-  if (queueDragActive || queueReorderPending) {
-    if (!pendingQueueState || Date.parse(state.server_time) >= Date.parse(pendingQueueState.server_time)) {
-      pendingQueueState = state;
+  if (appState.queueDragActive || appState.queueReorderPending) {
+    if (!appState.pendingQueueState || Date.parse(state.server_time) >= Date.parse(appState.pendingQueueState.server_time)) {
+      appState.pendingQueueState = state;
     }
     return;
   }
   if (Array.isArray(state.permissions)) {
-    currentPermissions = new Set(state.permissions);
+    appState.currentPermissions = new Set(state.permissions);
   }
 
-  const timelineChanged = !samePlaybackTimeline(lastState, state);
-  lastState = state;
-  lastStateReceivedAt = Date.now();
+  const timelineChanged = !samePlaybackTimeline(appState.lastState, state);
+  appState.lastState = state;
+  appState.lastStateReceivedAt = Date.now();
 
   const queue = state.queue || [];
   const history = state.history || [];
@@ -150,7 +159,7 @@ function renderPresence(state) {
   name.className = "listener-name";
   name.textContent = username;
   item.append(name);
-  if (canAdministerCurrentRoom) {
+  if (appState.canAdministerCurrentRoom) {
     const disconnect = document.createElement("button");
     disconnect.className = "secondary compact listener-disconnect";
     disconnect.type = "button";
@@ -185,7 +194,7 @@ function closeAutoDJSourceMenu() {
 }
 
 function renderAutoDJSourceMenu(availablePlaylists) {
-  const selected = lastState?.auto_dj?.source || {type: "library"};
+  const selected = appState.lastState?.auto_dj?.source || {type: "library"};
   const sources = [
     {type: "library", name: "Entire Library"},
     ...availablePlaylists.map((playlist) => ({type: "playlist", playlist_id: playlist.id, name: playlist.name})),
@@ -222,3 +231,5 @@ function renderAutoDJSourceMenu(availablePlaylists) {
     return item;
   }));
 }
+
+export {renderState, renderAutoDJSourceMenu, closeAutoDJSourceMenu};

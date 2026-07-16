@@ -1,30 +1,36 @@
+import {appState, ui, config, storageSet} from "./main-context.js";
+import {api} from "./api-module.js";
+import {standardTrackCommands, trackRow, trashButton} from "./queue.js";
+const {playlistStorageKey} = config;
+const { deletePlaylistButton, importPlaylistFolderButton, playlistDetailEl, playlistSelect } = ui;
 // Playlist loading and playlist item rendering.
 
-async function loadPlaylists(selectID = selectedPlaylistID) {
-  playlists = await api("/api/playlists");
-  if (!playlists.some((playlist) => playlist.id === selectID)) {
-    selectID = playlists[0]?.id || 0;
+async function loadPlaylists(selectID = appState.selectedPlaylistID) {
+  appState.playlists = await api("/api/playlists");
+  if (!appState.playlists.some((playlist) => playlist.id === selectID)) {
+    selectID = appState.playlists[0]?.id || 0;
   }
-  selectedPlaylistID = selectID;
-  storageSet(playlistStorageKey, selectedPlaylistID || "");
+  appState.selectedPlaylistID = selectID;
+  storageSet(playlistStorageKey, appState.selectedPlaylistID || "");
   renderPlaylists();
-  if (selectedPlaylistID) {
-    await loadPlaylistDetail(selectedPlaylistID);
+  if (appState.selectedPlaylistID) {
+    await loadPlaylistDetail(appState.selectedPlaylistID);
   } else {
     playlistDetailEl.replaceChildren(emptyHint("No playlists yet"));
   }
+  const {runSearch} = await import("./bootstrap.js");
   runSearch().catch(console.error);
 }
 
 function renderPlaylists() {
-  playlistSelect.replaceChildren(...playlists.map((playlist) => {
+  playlistSelect.replaceChildren(...appState.playlists.map((playlist) => {
     const option = document.createElement("option");
     option.value = String(playlist.id);
     option.textContent = playlist.name;
     return option;
   }));
-  playlistSelect.hidden = playlists.length === 0;
-  playlistSelect.value = selectedPlaylistID ? String(selectedPlaylistID) : "";
+  playlistSelect.hidden = appState.playlists.length === 0;
+  playlistSelect.value = appState.selectedPlaylistID ? String(appState.selectedPlaylistID) : "";
   updatePlaylistActionButtons();
 }
 
@@ -58,12 +64,12 @@ function renderPlaylistDetail(playlist) {
   list.className = "playlist-items";
   list.replaceChildren(...(items.length ? items.map((item) => renderPlaylistItem(playlist, item)) : [emptyHint("No tracks in this playlist")]));
   playlistDetailEl.replaceChildren(list);
-  playlists = playlists.map((existing) => existing.id === playlist.id ? playlist : existing);
+  appState.playlists = appState.playlists.map((existing) => existing.id === playlist.id ? playlist : existing);
   updatePlaylistActionButtons();
 }
 
 function updatePlaylistActionButtons() {
-  const playlist = playlists.find((item) => item.id === selectedPlaylistID);
+  const playlist = appState.playlists.find((item) => item.id === appState.selectedPlaylistID);
   deletePlaylistButton.hidden = !playlist?.can_edit;
   importPlaylistFolderButton.hidden = !playlist?.can_edit;
 }
@@ -74,3 +80,5 @@ function emptyHint(text, tag = "p") {
   hint.textContent = text;
   return hint;
 }
+
+export {loadPlaylists, loadPlaylistDetail, renderPlaylists, renderPlaylistItem, renderPlaylistDetail, updatePlaylistActionButtons, emptyHint};

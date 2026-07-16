@@ -1,14 +1,27 @@
+import {appState, ui, config, storageSet} from "./main-context.js";
+import {api} from "./api-module.js";
+import {roomAPI, closeEvents, forceLogout, connectEvents, hasMedia, applyAudioSettings, restoreRailPreferences, restoreSearchPreferences, restoreVolumePreferences, renderPlaybackButton, renderVolumeControl, setSeekUI, volumeModeStorageKey} from "./core.js";
+import {renderState, closeAutoDJSourceMenu, renderAutoDJSourceMenu} from "./state-render.js";
+import {command, hasRoomPermission, standardTrackCommands, trackRow, closePlaylistAddMenus} from "./queue.js";
+import {initQueueSortable, updateQueueSortable} from "./player.js";
+import {loadLibraryStatus, setRailMode, closeRoomSettings, toggleRoomSettings, renderRoomSettings, readRoomSettingsGrants} from "./room.js";
+import {loadPlaylists, loadPlaylistDetail} from "./playlists.js";
+import {emptyHint} from "./playlists.js";
+const {defaultVolume, playlistStorageKey, minimumRoomSaveFeedbackMS, roomSaveResultVisibleMS,
+  searchTextStorageKey, searchDebounceMS, searchFieldStorageKey, localVolumeStorageKey,
+  localMutedStorageKey} = config;
+const { audio, autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton, clearQueue: clearQueueButton, closeRoomSettingsButton, currentUserEl, deletePlaylistButton, importPlaylistFolderButton, libraryTab, listenerList: listenerListEl, logoutForm, mute: muteButton, newPlaylistButton, playlistCreateForm, playlistCreatePanel, playlistFolderInput, playlistImportStatus, playlistName: playlistNameInput, playlistSelect, playlistsTab, presenceButton, queueChangesButton, queueChangesList: queueChangesListEl, results: resultsEl, roomSelect, roomSettingsButton, roomSettingsStatus, roomSettingsView, saveRoomSettingsButton, searchField, searchInput, seek: seekInput, togglePlayback: togglePlaybackButton, volume: volumeInput, volumeMode: volumeModeButton } = ui;
 // Page startup, navigation, and event wiring.
 
 async function loadRooms(info = null) {
   info ||= await api("/api/session");
   currentUserEl.textContent = info.user?.display_name || info.user?.username || "Signed in";
   const rooms = info.rooms || [];
-  if (!currentRoomID) {
-    currentRoomID = info.default_room_id || (rooms[0] && rooms[0].id) || "main";
+  if (!appState.currentRoomID) {
+    appState.currentRoomID = info.default_room_id || (rooms[0] && rooms[0].id) || "main";
   }
-  if (rooms.length > 0 && !rooms.some((room) => room.id === currentRoomID)) {
-    currentRoomID = rooms[0].id;
+  if (rooms.length > 0 && !rooms.some((room) => room.id === appState.currentRoomID)) {
+    appState.currentRoomID = rooms[0].id;
   }
   roomSelect.replaceChildren(...rooms.map((room) => {
     const option = document.createElement("option");
@@ -16,21 +29,21 @@ async function loadRooms(info = null) {
     option.textContent = room.name || room.id;
     return option;
   }));
-  roomSelect.value = currentRoomID;
+  roomSelect.value = appState.currentRoomID;
   roomSelect.disabled = rooms.length <= 1;
-  currentPermissions = new Set(info.permissions?.[currentRoomID] || []);
-  if (info.disconnected?.[currentRoomID]) {
+  appState.currentPermissions = new Set(info.permissions?.[appState.currentRoomID] || []);
+  if (info.disconnected?.[appState.currentRoomID]) {
     forceLogout();
     return false;
   }
-  canAdministerCurrentRoom = Boolean(info.room_administration?.[currentRoomID]);
-  roomSettingsButton.hidden = !canAdministerCurrentRoom;
-  if (!canAdministerCurrentRoom) closeRoomSettings();
+  appState.canAdministerCurrentRoom = Boolean(info.room_administration?.[appState.currentRoomID]);
+  roomSettingsButton.hidden = !appState.canAdministerCurrentRoom;
+  if (!appState.canAdministerCurrentRoom) closeRoomSettings();
   return true;
 }
 
 async function switchRoom(roomID, updateHistory = true) {
-  if (!roomID || roomID === currentRoomID) return;
+  if (!roomID || roomID === appState.currentRoomID) return;
   roomSelect.disabled = true;
   try {
     const [info, state] = await Promise.all([
@@ -45,12 +58,12 @@ async function switchRoom(roomID, updateHistory = true) {
     audio.pause();
     closeRoomSettings();
     closeAutoDJSourceMenu();
-    currentRoomID = roomID;
-    lastState = null;
-    lastStateReceivedAt = 0;
-    queueDragActive = false;
-    queueReorderPending = false;
-    pendingQueueState = null;
+    appState.currentRoomID = roomID;
+    appState.lastState = null;
+    appState.lastStateReceivedAt = 0;
+    appState.queueDragActive = false;
+    appState.queueReorderPending = false;
+    appState.pendingQueueState = null;
     if (updateHistory) history.pushState(null, "", `/rooms/${encodeURIComponent(roomID)}`);
 
     if (!await loadRooms(info)) return;
@@ -59,8 +72,8 @@ async function switchRoom(roomID, updateHistory = true) {
     connectEvents();
   } catch (err) {
     console.error(err);
-    roomSelect.value = currentRoomID;
-    history.replaceState(null, "", `/rooms/${encodeURIComponent(currentRoomID)}`);
+    roomSelect.value = appState.currentRoomID;
+    history.replaceState(null, "", `/rooms/${encodeURIComponent(appState.currentRoomID)}`);
   } finally {
     roomSelect.disabled = roomSelect.options.length <= 1;
     updateQueueSortable();
@@ -85,18 +98,18 @@ closeRoomSettingsButton.addEventListener("click", closeRoomSettings);
 
 playlistSelect.addEventListener("change", async () => {
   playlistImportStatus.textContent = "";
-  selectedPlaylistID = Number(playlistSelect.value);
-  if (!selectedPlaylistID) return;
-  storageSet(playlistStorageKey, selectedPlaylistID);
-  await loadPlaylistDetail(selectedPlaylistID);
+  appState.selectedPlaylistID = Number(playlistSelect.value);
+  if (!appState.selectedPlaylistID) return;
+  storageSet(playlistStorageKey, appState.selectedPlaylistID);
+  await loadPlaylistDetail(appState.selectedPlaylistID);
   runSearch().catch(console.error);
 });
 
 deletePlaylistButton.addEventListener("click", async () => {
-  const playlist = playlists.find((item) => item.id === selectedPlaylistID);
+  const playlist = appState.playlists.find((item) => item.id === appState.selectedPlaylistID);
   if (!playlist?.can_edit || !confirm(`Delete playlist "${playlist.name}"?`)) return;
   await api(`/api/playlists/${playlist.id}`, {method: "DELETE"});
-  selectedPlaylistID = 0;
+  appState.selectedPlaylistID = 0;
   await loadPlaylists(0);
 });
 
@@ -128,7 +141,7 @@ importPlaylistFolderButton.addEventListener("click", () => {
 });
 
 playlistFolderInput.addEventListener("change", async () => {
-  const playlist = playlists.find((item) => item.id === selectedPlaylistID);
+  const playlist = appState.playlists.find((item) => item.id === appState.selectedPlaylistID);
   if (!playlist?.can_edit) return;
   const files = [...playlistFolderInput.files]
     .filter((file) => file.name.toLowerCase().endsWith(".mp3"))
@@ -164,7 +177,7 @@ playlistFolderInput.addEventListener("change", async () => {
 });
 
 saveRoomSettingsButton.addEventListener("click", async () => {
-  clearTimeout(roomSaveFeedbackTimer);
+  clearTimeout(appState.roomSaveFeedbackTimer);
   saveRoomSettingsButton.disabled = true;
   saveRoomSettingsButton.textContent = "Saving...";
   roomSettingsStatus.textContent = "Saving...";
@@ -186,7 +199,7 @@ saveRoomSettingsButton.addEventListener("click", async () => {
     roomSettingsStatus.title = "";
     api(roomAPI("/api/state")).then(renderState).catch(console.error);
   }
-  roomSaveFeedbackTimer = setTimeout(() => {
+  appState.roomSaveFeedbackTimer = setTimeout(() => {
     saveRoomSettingsButton.disabled = false;
     saveRoomSettingsButton.textContent = "Save";
     roomSettingsStatus.textContent = "";
@@ -201,16 +214,16 @@ document.getElementById("searchForm").addEventListener("submit", async (event) =
 
 searchInput.addEventListener("input", () => {
   storageSet(searchTextStorageKey, searchInput.value);
-  clearTimeout(searchTimer);
+  clearTimeout(appState.searchTimer);
   resultsEl.replaceChildren();
-  searchTimer = setTimeout(() => {
+  appState.searchTimer = setTimeout(() => {
     runSearch().catch(console.error);
   }, searchDebounceMS);
 });
 
 searchField.addEventListener("change", () => {
   storageSet(searchFieldStorageKey, searchField.value);
-  clearTimeout(searchTimer);
+  clearTimeout(appState.searchTimer);
   runSearch().catch(console.error);
 });
 
@@ -221,7 +234,7 @@ for (const [id, action] of [["previous", "previous"], ["skip", "skip"]]) {
 }
 
 togglePlaybackButton.addEventListener("click", async () => {
-  if (lastState && lastState.current && !lastState.paused) {
+  if (appState.lastState && appState.lastState.current && !appState.lastState.paused) {
     await command({action: "pause"});
     return;
   }
@@ -229,37 +242,37 @@ togglePlaybackButton.addEventListener("click", async () => {
 });
 
 seekInput.addEventListener("input", () => {
-  seeking = true;
+  appState.seeking = true;
   setSeekUI(Number(seekInput.value));
 });
 
 seekInput.addEventListener("change", async () => {
   if (!hasMedia()) {
-    seeking = false;
+    appState.seeking = false;
     setSeekUI(0);
     return;
   }
   const positionMS = Math.max(0, Math.round(Number(seekInput.value) * 1000));
-  seeking = false;
+  appState.seeking = false;
   await command({action: "seek", position_ms: positionMS});
 });
 
 volumeInput.addEventListener("input", () => {
   const next = Number(volumeInput.value);
   if (!Number.isFinite(next)) return;
-  if (volumeMode === "room") {
+  if (appState.volumeMode === "room") {
     applyAudioSettings(next, false);
   } else {
-    localVolume = next;
-    localMuted = next === 0;
-    storageSet(localVolumeStorageKey, localVolume);
-    storageSet(localMutedStorageKey, localMuted);
-    applyAudioSettings(localVolume, localMuted);
+    appState.localVolume = next;
+    appState.localMuted = next === 0;
+    storageSet(localVolumeStorageKey, appState.localVolume);
+    storageSet(localMutedStorageKey, appState.localMuted);
+    applyAudioSettings(appState.localVolume, appState.localMuted);
   }
 });
 
 volumeInput.addEventListener("change", async () => {
-  if (volumeMode !== "room" || !hasRoomPermission("volume_control")) return;
+  if (appState.volumeMode !== "room" || !hasRoomPermission("volume_control")) return;
   try {
     await command({action: "room_audio", volume: Number(volumeInput.value), muted: false});
   } catch (err) {
@@ -269,29 +282,29 @@ volumeInput.addEventListener("change", async () => {
 });
 
 volumeModeButton.addEventListener("click", () => {
-  volumeMode = volumeMode === "room" ? "local" : "room";
-  storageSet(volumeModeStorageKey(), volumeMode);
+  appState.volumeMode = appState.volumeMode === "room" ? "local" : "room";
+  storageSet(volumeModeStorageKey(), appState.volumeMode);
   renderVolumeControl();
 });
 
 muteButton.addEventListener("click", async () => {
-  if (volumeMode === "room") {
+  if (appState.volumeMode === "room") {
     if (!hasRoomPermission("volume_control")) return;
-    const roomAudio = lastState?.room_audio || {volume: defaultVolume, muted: false};
+    const roomAudio = appState.lastState?.room_audio || {volume: defaultVolume, muted: false};
     const muted = !roomAudio.muted && roomAudio.volume > 0;
     const volume = !muted && roomAudio.volume === 0 ? defaultVolume : roomAudio.volume;
     await command({action: "room_audio", volume, muted});
     return;
   }
-  if (localMuted || localVolume === 0) {
-    if (localVolume === 0) localVolume = defaultVolume;
-    localMuted = false;
+  if (appState.localMuted || appState.localVolume === 0) {
+    if (appState.localVolume === 0) appState.localVolume = defaultVolume;
+    appState.localMuted = false;
   } else {
-    localMuted = true;
+    appState.localMuted = true;
   }
-  storageSet(localVolumeStorageKey, localVolume);
-  storageSet(localMutedStorageKey, localMuted);
-  applyAudioSettings(localVolume, localMuted);
+  storageSet(localVolumeStorageKey, appState.localVolume);
+  storageSet(localMutedStorageKey, appState.localMuted);
+  applyAudioSettings(appState.localVolume, appState.localMuted);
 });
 
 presenceButton.addEventListener("click", () => {
@@ -392,7 +405,7 @@ async function start() {
   if (!await loadRooms()) {
     return;
   }
-  history.replaceState(null, "", `/rooms/${encodeURIComponent(currentRoomID)}`);
+  history.replaceState(null, "", `/rooms/${encodeURIComponent(appState.currentRoomID)}`);
   restoreVolumePreferences();
   initQueueSortable();
   connectEvents();
@@ -403,3 +416,5 @@ async function start() {
 }
 
 start().catch(console.error);
+
+export {runSearch, switchRoom};

@@ -1,3 +1,9 @@
+import {appState, ui, config, libraryViews, storageSet} from "./main-context.js";
+import {api} from "./api-module.js";
+import {roomAPI} from "./core.js";
+import {loadPlaylists} from "./playlists.js";
+const {railModeStorageKey} = config;
+const { libraryPanel, libraryStatus, libraryTab, playlistsTab, playlistsView, roomSettingsButton, roomSettingsGrants, roomSettingsStatus, roomSettingsView } = ui;
 // Library rail mode and room permissions/settings.
 
 async function loadLibraryStatus() {
@@ -23,12 +29,12 @@ function setRailMode(mode, {load = true, persist = true} = {}) {
   });
   playlistsView.hidden = !playlistsActive;
   if (playlistsActive && load) {
-    loadPlaylists(selectedPlaylistID).catch(console.error);
+    loadPlaylists(appState.selectedPlaylistID).catch(console.error);
   }
 }
 
 async function openRoomSettings() {
-  if (!canAdministerCurrentRoom) return;
+  if (!appState.canAdministerCurrentRoom) return;
   libraryPanel.hidden = true;
   roomSettingsView.hidden = false;
   roomSettingsButton.setAttribute("aria-expanded", "true");
@@ -134,6 +140,8 @@ function readRoomSettingsGrants() {
   }
   return grants;
 }
+
+export {loadLibraryStatus, setRailMode, closeRoomSettings, toggleRoomSettings, renderRoomSettings, readRoomSettingsGrants};
 
 async function loadRoomSettings() {
   roomSettingsStatus.textContent = "Loading...";
