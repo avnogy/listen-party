@@ -1,419 +1,158 @@
-import {appState, ui, config, storageSet} from "./main-context.js";
-import {api} from "../shared/api-module.js";
-import {roomAPI, closeEvents, forceLogout, connectEvents, hasMedia, applyAudioSettings, restoreRailPreferences, restoreSearchPreferences, restoreVolumePreferences, renderPlaybackButton, renderVolumeControl, setSeekUI, volumeModeStorageKey} from "./core.js";
-import {renderState, closeAutoDJSourceMenu, renderAutoDJSourceMenu} from "./state-render.js";
-import {command, hasRoomPermission, standardTrackCommands, trackRow, closePlaylistAddMenus} from "./queue.js";
-import {initQueueSortable, updateQueueSortable} from "./player.js";
-import {loadLibraryStatus, setRailMode, closeRoomSettings, toggleRoomSettings, renderRoomSettings, readRoomSettingsGrants} from "./room.js";
-import {loadPlaylists, loadPlaylistDetail, emptyHint} from "./playlists.js";
-const {defaultVolume, playlistStorageKey, minimumRoomSaveFeedbackMS, roomSaveResultVisibleMS,
-  searchTextStorageKey, searchDebounceMS, searchFieldStorageKey, localVolumeStorageKey,
-  localMutedStorageKey} = config;
-const { audio, autoDJ: autoDJButton, autoDJSource: autoDJSourceButton, autoDJSourceMenu, clearHistory: clearHistoryButton, clearQueue: clearQueueButton, closeRoomSettingsButton, currentUserEl, deletePlaylistButton, importPlaylistFolderButton, libraryTab, listenerList: listenerListEl, logoutForm, mute: muteButton, newPlaylistButton, playlistCreateForm, playlistCreatePanel, playlistFolderInput, playlistImportStatus, playlistName: playlistNameInput, playlistSelect, playlistsTab, presenceButton, queueChangesButton, queueChangesList: queueChangesListEl, results: resultsEl, roomSelect, roomSettingsButton, roomSettingsStatus, roomSettingsView, saveRoomSettingsButton, searchField, searchInput, seek: seekInput, togglePlayback: togglePlaybackButton, volume: volumeInput, volumeMode: volumeModeButton } = ui;
-// Page startup, navigation, and event wiring.
+// Main app bootstrap - creates store, components, and wires them together
+import { createStore } from "../core/store/createStore.js";
+import { initialState } from "./store/state.js";
+import { storageSet } from "../core/store/persistence.js";
+import { api, roomAPI } from "../core/api/index.js";
+import { createCoordinator } from "./coordinator.js";
+import { createEventsComponent, createPlaybackComponent, createQueueComponent, createRoomComponent, createPlaylistsComponent, createLibraryComponent } from "./components/index.js";
 
-async function loadRooms(info = null) {
-  info ||= await api("/api/session");
-  currentUserEl.textContent = info.user?.display_name || info.user?.username || "Signed in";
+// Create store
+export const store = createStore(initialState);
+
+// Persistence
+store.subscribe((state) => {
+  storageSet("listen-party.searchText", state.searchText);
+  storageSet("listen-party.searchField", state.searchField);
+  storageSet("listen-party.railMode", state.railMode);
+  storageSet("listen-party.selectedPlaylist", state.selectedPlaylistId);
+  storageSet("listen-party.localVolume", state.localVolume);
+  storageSet("listen-party.localMuted", state.localMuted);
+  storageSet(`listen-party.volumeMode.${state.currentRoomId || "default"}`, state.volumeMode);
+});
+
+// Create coordinator
+const coordinator = createCoordinator(store);
+
+// Create components (order matters: dependencies first)
+const events = createEventsComponent(store);
+const playback = createPlaybackComponent(store);
+const queue = createQueueComponent(store, { renderState: coordinator.renderState });
+const playlists = createPlaylistsComponent(store);
+const room = createRoomComponent(store, { playlistsComponent: playlists });
+const library = createLibraryComponent(store);
+
+// Register components with coordinator for render orchestration
+coordinator.registerComponents([playback, queue, events, room, playlists]);
+
+// Room switching
+async function loadRooms(sessionInfo = null) {
+  const info = sessionInfo || await api("/api/session");
   const rooms = info.rooms || [];
-  if (!appState.currentRoomID) {
-    appState.currentRoomID = info.default_room_id || (rooms[0] && rooms[0].id) || "main";
+  const currentRoomId = store.getState().currentRoomId || info.default_room_id || (rooms[0] && rooms[0].id) || "main";
+
+  if (rooms.length > 0 && !rooms.some((room) => room.id === currentRoomId)) {
+    store.setState({ currentRoomId: rooms[0].id });
   }
-  if (rooms.length > 0 && !rooms.some((room) => room.id === appState.currentRoomID)) {
-    appState.currentRoomID = rooms[0].id;
-  }
+
+  const roomSelect = document.getElementById("roomSelect");
+  const currentUserEl = document.getElementById("currentUser");
+
+  if (currentUserEl) currentUserEl.textContent = info.user?.display_name || info.user?.username || "Signed in";
+
   roomSelect.replaceChildren(...rooms.map((room) => {
     const option = document.createElement("option");
     option.value = room.id;
     option.textContent = room.name || room.id;
     return option;
   }));
-  roomSelect.value = appState.currentRoomID;
+  roomSelect.value = currentRoomId;
   roomSelect.disabled = rooms.length <= 1;
-  appState.currentPermissions = new Set(info.permissions?.[appState.currentRoomID] || []);
-  if (info.disconnected?.[appState.currentRoomID]) {
-    forceLogout();
+
+  store.setState({
+    currentRoomId,
+    currentPermissions: new Set(info.permissions?.[currentRoomId] || []),
+    canAdministerCurrentRoom: Boolean(info.room_administration?.[currentRoomId]),
+  });
+
+  if (info.disconnected?.[currentRoomId]) {
+    playback.forceLogout();
     return false;
   }
-  appState.canAdministerCurrentRoom = Boolean(info.room_administration?.[appState.currentRoomID]);
-  roomSettingsButton.hidden = !appState.canAdministerCurrentRoom;
-  if (!appState.canAdministerCurrentRoom) closeRoomSettings();
   return true;
 }
 
-async function switchRoom(roomID, updateHistory = true) {
-  if (!roomID || roomID === appState.currentRoomID) return;
+async function switchRoom(roomId, updateHistory = true) {
+  if (!roomId || roomId === store.getState().currentRoomId) return;
+  const roomSelect = document.getElementById("roomSelect");
   roomSelect.disabled = true;
+
   try {
+    events.closeEvents();
+    document.getElementById("audio")?.pause();
+    room.closeRoomSettings();
+    events.closeAutoDJSourceMenu();
+
+    store.setState({
+      currentRoomId: roomId,
+      lastState: null,
+      lastStateReceivedAt: 0,
+      queueDragActive: false,
+      queueReorderPending: false,
+      pendingQueueState: null,
+    });
+
+    if (updateHistory) history.pushState(null, "", `/rooms/${encodeURIComponent(roomId)}`);
+
     const [info, state] = await Promise.all([
       api("/api/session"),
-      api(`/rooms/${encodeURIComponent(roomID)}/api/state`),
+      api(`/rooms/${encodeURIComponent(roomId)}/api/state`),
     ]);
-    if (!(info.rooms || []).some((room) => room.id === roomID)) {
+
+    if (!(info.rooms || []).some((room) => room.id === roomId)) {
       throw new Error("room not found");
     }
 
-    closeEvents();
-    audio.pause();
-    closeRoomSettings();
-    closeAutoDJSourceMenu();
-    appState.currentRoomID = roomID;
-    appState.lastState = null;
-    appState.lastStateReceivedAt = 0;
-    appState.queueDragActive = false;
-    appState.queueReorderPending = false;
-    appState.pendingQueueState = null;
-    if (updateHistory) history.pushState(null, "", `/rooms/${encodeURIComponent(roomID)}`);
-
     if (!await loadRooms(info)) return;
-    restoreVolumePreferences();
-    renderState(state);
-    connectEvents();
+    playback.restoreVolumePreferences();
+    coordinator.renderState(state);
+    events.connectEvents();
   } catch (err) {
     console.error(err);
-    roomSelect.value = appState.currentRoomID;
-    history.replaceState(null, "", `/rooms/${encodeURIComponent(appState.currentRoomID)}`);
+    roomSelect.value = store.getState().currentRoomId;
+    history.replaceState(null, "", `/rooms/${encodeURIComponent(store.getState().currentRoomId)}`);
   } finally {
-    roomSelect.disabled = roomSelect.options.length <= 1;
-    updateQueueSortable();
+    roomSelect.disabled = (roomSelect?.options?.length || 0) <= 1;
+    queue.updateSortable();
   }
 }
 
-async function runSearch() {
-  const q = searchInput.value.trim();
-  const field = searchField.value;
-  const params = new URLSearchParams({q, field});
-  const tracks = await api(`/api/search?${params}`);
-  if (q !== searchInput.value.trim() || field !== searchField.value) {
-    return;
-  }
-  resultsEl.replaceChildren(...(tracks.length ? tracks.map((track) => trackRow(track, standardTrackCommands(track.dedupe_key))) : [emptyHint("No matching tracks")]));
-}
-
-libraryTab.addEventListener("click", () => setRailMode("library"));
-playlistsTab.addEventListener("click", () => setRailMode("playlists"));
-roomSettingsButton.addEventListener("click", toggleRoomSettings);
-closeRoomSettingsButton.addEventListener("click", closeRoomSettings);
-
-playlistSelect.addEventListener("change", async () => {
-  playlistImportStatus.textContent = "";
-  appState.selectedPlaylistID = Number(playlistSelect.value);
-  if (!appState.selectedPlaylistID) return;
-  storageSet(playlistStorageKey, appState.selectedPlaylistID);
-  await loadPlaylistDetail(appState.selectedPlaylistID);
-  runSearch().catch(console.error);
-});
-
-deletePlaylistButton.addEventListener("click", async () => {
-  const playlist = appState.playlists.find((item) => item.id === appState.selectedPlaylistID);
-  if (!playlist?.can_edit || !confirm(`Delete playlist "${playlist.name}"?`)) return;
-  await api(`/api/playlists/${playlist.id}`, {method: "DELETE"});
-  appState.selectedPlaylistID = 0;
-  await loadPlaylists(0);
-});
-
-newPlaylistButton.addEventListener("click", () => {
-  const open = playlistCreatePanel.hidden;
-  playlistCreatePanel.hidden = !open;
-  if (open) {
-    playlistNameInput.focus();
-  }
-});
-
-playlistCreateForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const name = playlistNameInput.value.trim();
-  if (!name) return;
-  const playlist = await api("/api/playlists", {
-    method: "POST",
-    body: JSON.stringify({name}),
-  });
-  playlistNameInput.value = "";
-  playlistCreatePanel.hidden = true;
-  await loadPlaylists(playlist.id);
-});
-
-importPlaylistFolderButton.addEventListener("click", () => {
-  playlistImportStatus.textContent = "";
-  playlistFolderInput.value = "";
-  playlistFolderInput.click();
-});
-
-playlistFolderInput.addEventListener("change", async () => {
-  const playlist = appState.playlists.find((item) => item.id === appState.selectedPlaylistID);
-  if (!playlist?.can_edit) return;
-  const files = [...playlistFolderInput.files]
-    .filter((file) => file.name.toLowerCase().endsWith(".mp3"))
-    .map((file) => ({
-      relative_path: file.webkitRelativePath || file.name,
-      size: file.size,
-      last_modified_ms: file.lastModified,
-    }));
-  if (files.length === 0) {
-    playlistImportStatus.textContent = "The selected folder contains no MP3 files";
-    return;
-  }
-  importPlaylistFolderButton.disabled = true;
-  playlistImportStatus.textContent = `Matching ${files.length} files...`;
-  try {
-    const result = await api(`/api/playlists/${playlist.id}/import-folder`, {
-      method: "POST",
-      body: JSON.stringify({files}),
-    });
-    if (result.imported > 0) {
-      playlistImportStatus.textContent = "Playlist imported";
-    } else if (result.duplicates > 0) {
-      playlistImportStatus.textContent = "Playlist is already up to date";
-    } else {
-      playlistImportStatus.textContent = "No indexed tracks matched this folder";
-    }
-    await loadPlaylists(playlist.id);
-  } catch (err) {
-    playlistImportStatus.textContent = err.message || "Folder import failed";
-  } finally {
-    importPlaylistFolderButton.disabled = false;
-  }
-});
-
-saveRoomSettingsButton.addEventListener("click", async () => {
-  clearTimeout(appState.roomSaveFeedbackTimer);
-  saveRoomSettingsButton.disabled = true;
-  saveRoomSettingsButton.textContent = "Saving...";
-  roomSettingsStatus.textContent = "Saving...";
-  roomSettingsStatus.title = "";
-  const saveRequest = api(roomAPI("/api/admin/grants"), {
-      method: "PUT",
-      body: JSON.stringify({grants: readRoomSettingsGrants()}),
-    }).then((settings) => ({settings}), (error) => ({error}));
-  const [result] = await Promise.all([saveRequest, new Promise((resolve) => setTimeout(resolve, minimumRoomSaveFeedbackMS))]);
-  if (result.error) {
-    saveRoomSettingsButton.textContent = "Failed";
-    roomSettingsStatus.textContent = "Failed";
-    roomSettingsStatus.title = result.error.message || "Save failed";
-  } else {
-    const settings = result.settings;
-    renderRoomSettings(settings.grants || {});
-    saveRoomSettingsButton.textContent = "Saved";
-    roomSettingsStatus.textContent = "Saved";
-    roomSettingsStatus.title = "";
-    api(roomAPI("/api/state")).then(renderState).catch(console.error);
-  }
-  appState.roomSaveFeedbackTimer = setTimeout(() => {
-    saveRoomSettingsButton.disabled = false;
-    saveRoomSettingsButton.textContent = "Save";
-    roomSettingsStatus.textContent = "";
-    roomSettingsStatus.title = "";
-  }, roomSaveResultVisibleMS);
-});
-
-document.getElementById("searchForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await runSearch();
-});
-
-searchInput.addEventListener("input", () => {
-  storageSet(searchTextStorageKey, searchInput.value);
-  clearTimeout(appState.searchTimer);
-  resultsEl.replaceChildren();
-  appState.searchTimer = setTimeout(() => {
-    runSearch().catch(console.error);
-  }, searchDebounceMS);
-});
-
-searchField.addEventListener("change", () => {
-  storageSet(searchFieldStorageKey, searchField.value);
-  clearTimeout(appState.searchTimer);
-  runSearch().catch(console.error);
-});
-
-for (const [id, action] of [["previous", "previous"], ["skip", "skip"]]) {
-  document.getElementById(id).addEventListener("click", async () => {
-    await command({action});
-  });
-}
-
-togglePlaybackButton.addEventListener("click", async () => {
-  if (appState.lastState && appState.lastState.current && !appState.lastState.paused) {
-    await command({action: "pause"});
-    return;
-  }
-  await command({action: "play"});
-});
-
-seekInput.addEventListener("input", () => {
-  appState.seeking = true;
-  setSeekUI(Number(seekInput.value));
-});
-
-seekInput.addEventListener("change", async () => {
-  if (!hasMedia()) {
-    appState.seeking = false;
-    setSeekUI(0);
-    return;
-  }
-  const positionMS = Math.max(0, Math.round(Number(seekInput.value) * 1000));
-  appState.seeking = false;
-  await command({action: "seek", position_ms: positionMS});
-});
-
-volumeInput.addEventListener("input", () => {
-  const next = Number(volumeInput.value);
-  if (!Number.isFinite(next)) return;
-  if (appState.volumeMode === "room") {
-    applyAudioSettings(next, false);
-  } else {
-    appState.localVolume = next;
-    appState.localMuted = next === 0;
-    storageSet(localVolumeStorageKey, appState.localVolume);
-    storageSet(localMutedStorageKey, appState.localMuted);
-    applyAudioSettings(appState.localVolume, appState.localMuted);
-  }
-});
-
-volumeInput.addEventListener("change", async () => {
-  if (appState.volumeMode !== "room" || !hasRoomPermission("volume_control")) return;
-  try {
-    await command({action: "room_audio", volume: Number(volumeInput.value), muted: false});
-  } catch (err) {
-    console.error(err);
-    renderVolumeControl();
-  }
-});
-
-volumeModeButton.addEventListener("click", () => {
-  appState.volumeMode = appState.volumeMode === "room" ? "local" : "room";
-  storageSet(volumeModeStorageKey(), appState.volumeMode);
-  renderVolumeControl();
-});
-
-muteButton.addEventListener("click", async () => {
-  if (appState.volumeMode === "room") {
-    if (!hasRoomPermission("volume_control")) return;
-    const roomAudio = appState.lastState?.room_audio || {volume: defaultVolume, muted: false};
-    const muted = !roomAudio.muted && roomAudio.volume > 0;
-    const volume = !muted && roomAudio.volume === 0 ? defaultVolume : roomAudio.volume;
-    await command({action: "room_audio", volume, muted});
-    return;
-  }
-  if (appState.localMuted || appState.localVolume === 0) {
-    if (appState.localVolume === 0) appState.localVolume = defaultVolume;
-    appState.localMuted = false;
-  } else {
-    appState.localMuted = true;
-  }
-  storageSet(localVolumeStorageKey, appState.localVolume);
-  storageSet(localMutedStorageKey, appState.localMuted);
-  applyAudioSettings(appState.localVolume, appState.localMuted);
-});
-
-presenceButton.addEventListener("click", () => {
-  const nextOpen = listenerListEl.hidden;
-  listenerListEl.hidden = !nextOpen;
-  presenceButton.setAttribute("aria-expanded", String(nextOpen));
-});
-
-queueChangesButton.addEventListener("click", () => {
-  const nextOpen = queueChangesListEl.hidden;
-  queueChangesListEl.hidden = !nextOpen;
-  queueChangesButton.setAttribute("aria-expanded", String(nextOpen));
-});
-
-document.addEventListener("click", (event) => {
-  closePlaylistAddMenus();
-  if (!event.target.closest(".auto-dj-control")) closeAutoDJSourceMenu();
-  if (!event.target.closest(".queue-changes-menu")) {
-    queueChangesListEl.hidden = true;
-    queueChangesButton.setAttribute("aria-expanded", "false");
-  }
-  if (event.target.closest(".presence-menu")) {
-    return;
-  }
-  listenerListEl.hidden = true;
-  presenceButton.setAttribute("aria-expanded", "false");
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") {
-    return;
-  }
-  closePlaylistAddMenus();
-  closeAutoDJSourceMenu();
-  if (!roomSettingsView.hidden) closeRoomSettings();
-  listenerListEl.hidden = true;
-  presenceButton.setAttribute("aria-expanded", "false");
-  queueChangesListEl.hidden = true;
-  queueChangesButton.setAttribute("aria-expanded", "false");
-});
-
-restoreSearchPreferences();
-restoreRailPreferences();
-renderPlaybackButton(false);
-applyAudioSettings(0, false);
-
-clearQueueButton.addEventListener("click", async () => {
-  await command({action: "queue_clear"});
-});
-
-autoDJButton.addEventListener("click", async () => {
-  const enabled = autoDJButton.dataset.enabled !== "true";
-  await command({action: "auto_dj", enabled});
-});
-
-autoDJSourceButton.addEventListener("click", async (event) => {
-  event.stopPropagation();
-  if (!autoDJSourceMenu.hidden) {
-    closeAutoDJSourceMenu();
-    return;
-  }
-  autoDJSourceMenu.replaceChildren();
-  const loading = document.createElement("p");
-  loading.className = "auto-dj-source-status";
-  loading.textContent = "Loading sources...";
-  autoDJSourceMenu.append(loading);
-  autoDJSourceMenu.hidden = false;
-  autoDJSourceButton.setAttribute("aria-expanded", "true");
-  try {
-    const availablePlaylists = await api("/api/playlists");
-    if (!autoDJSourceMenu.hidden) renderAutoDJSourceMenu(availablePlaylists);
-  } catch (err) {
-    console.error(err);
-    loading.textContent = err.message || "Could not load shuffle sources";
-  }
-});
-
-clearHistoryButton.addEventListener("click", async () => {
-  await command({action: "history_clear"});
-});
-
-roomSelect.addEventListener("change", () => {
+// Room select and popstate
+const roomSelect = document.getElementById("roomSelect");
+roomSelect?.addEventListener("change", () => {
   switchRoom(roomSelect.value).catch(console.error);
 });
 
 window.addEventListener("popstate", () => {
-  const roomID = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
-  if (roomID) switchRoom(roomID, false).catch(console.error);
+  const roomId = decodeURIComponent(location.pathname.match(/^\/rooms\/([^/]+)/)?.[1] || "");
+  if (roomId) switchRoom(roomId, false).catch(console.error);
 });
 
-logoutForm.addEventListener("submit", () => {
-  closeEvents();
-});
+// Logout
+const logoutForm = document.getElementById("logoutForm");
+logoutForm?.addEventListener("submit", () => events.closeEvents());
 
-window.addEventListener("pagehide", closeEvents);
-
+// Initial load
 async function start() {
-  if (!await loadRooms()) {
-    return;
-  }
-  history.replaceState(null, "", `/rooms/${encodeURIComponent(appState.currentRoomID)}`);
-  restoreVolumePreferences();
-  initQueueSortable();
-  connectEvents();
-  loadLibraryStatus();
-  loadPlaylists().catch(console.error);
-  runSearch().catch(console.error);
-  api(roomAPI("/api/state")).then(renderState).catch(console.error);
+  if (!await loadRooms()) return;
+
+  history.replaceState(null, "", `/rooms/${encodeURIComponent(store.getState().currentRoomId)}`);
+
+  // Start components
+  events.start();
+  playback.start();
+  queue.start();
+  playlists.start();
+  room.start();
+  library.start();
+
+  // Connect SSE
+  events.connectEvents();
+
+  // Fetch initial state
+  api(roomAPI(store.getState().currentRoomId, "/api/state")).then((state) => coordinator.renderState(state)).catch(console.error);
 }
 
 start().catch(console.error);
 
-export {runSearch, switchRoom};
+// Export for testing
+export { store as appStore };

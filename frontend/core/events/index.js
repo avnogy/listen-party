@@ -1,0 +1,1 @@
+export { EventSourceManager, createEventSourceManager } from "./EventSourceManager.js";
