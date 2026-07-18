@@ -83,6 +83,7 @@ async function switchRoom(roomID, updateHistory = true) {
     setQueueDragActive(false);
     setQueueReorderPending(false);
     setPendingQueueState(null);
+    setCanAdministerCurrentRoom(false);
     if (updateHistory) history.pushState(null, "", `/rooms/${encodeURIComponent(roomID)}`);
 
     if (!await loadRooms(info)) return;
