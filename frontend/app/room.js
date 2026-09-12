@@ -49,6 +49,8 @@ function init() {
 
 async function loadRooms(info = null) {
   info ||= await apiModule.api("/api/session");
+  document.getElementById("playlistFolderInput").accept =
+    info.audio_extensions.join(",");
   currentUserEl.textContent =
     info.user?.display_name || info.user?.username || "Signed in";
   const rooms = info.rooms || [];

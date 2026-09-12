@@ -32,7 +32,7 @@ const (
 	defaultAdminPassword = "admin"
 	sessionCookieName    = "listen_party_auth"
 	sessionKeyCookieName = "listen_party_session"
-	sessionDuration      = 24 * time.Hour
+	sessionDuration      = 7 * 24 * time.Hour
 	usersCollection      = "users"
 )
 

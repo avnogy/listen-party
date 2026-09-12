@@ -107,8 +107,11 @@ function init() {
     if (!playlist?.can_edit) {
       return;
     }
+    const extensions = playlistFolderInput.accept.split(",");
     const files = [...playlistFolderInput.files]
-      .filter((file) => file.name.toLowerCase().endsWith(".mp3"))
+      .filter((file) =>
+        extensions.some((ext) => ext && file.name.toLowerCase().endsWith(ext)),
+      )
       .map((file) => ({
         relative_path: file.webkitRelativePath || file.name,
         size: file.size,
@@ -116,7 +119,7 @@ function init() {
       }));
     if (files.length === 0) {
       playlistImportStatus.textContent =
-        "The selected folder contains no MP3 files";
+        "The selected folder contains no supported audio files";
       return;
     }
     importPlaylistFolderButton.disabled = true;

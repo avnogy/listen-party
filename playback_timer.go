@@ -25,12 +25,15 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 			<-s.Library.EnsureDuration(track.ID)
 			track, err = s.Library.ResolveDedupeKey(ctx, state.Current.DedupeKey)
 		}
-		if err == nil && track.DurationMS <= 0 {
-			slog.Warn("playback media duration unavailable; timer not scheduled", "room", room.ID, "dedupe_key", state.Current.DedupeKey)
-			room.Playback.cancelEndTimer()
-			return state
+		unavailable := err == nil && track.DurationMS <= 0
+		if err == nil && !unavailable {
+			media, openErr := s.Library.OpenMedia(ctx, track.ID)
+			unavailable = openErr != nil
+			if media != nil {
+				media.Close()
+			}
 		}
-		if err == nil {
+		if err == nil && !unavailable {
 			remaining := time.Duration(track.DurationMS)*time.Millisecond - time.Since(state.StartedAt)
 			if remaining > 0 {
 				key, startedAt := state.Current.DedupeKey, state.StartedAt
@@ -46,11 +49,19 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 		}
 
 		key := state.Current.DedupeKey
-		slog.Warn("skipping unavailable playback media", "room", room.ID, "dedupe_key", key)
 		if err := s.prepareAutoDJ(ctx, room); err != nil {
-			slog.Warn("prepare auto-dj while recovering playback", "room", room.ID, "error", err)
+			slog.Warn("prepare auto-dj while advancing playback", "room", room.ID, "error", err)
 		}
-		state = room.Playback.Ended(key)
+		if unavailable || err != nil {
+			slog.Warn("discarding unavailable playback media", "room", room.ID, "dedupe_key", key)
+			var discarded bool
+			state, discarded = room.Playback.Discard(key)
+			if discarded {
+				state = room.Playback.AddAction(RoomAction{Username: "System", Text: "Removed an unavailable track."})
+			}
+		} else {
+			state = room.Playback.Ended(key)
+		}
 		s.replenishAutoDJ(ctx, room)
 	}
 	room.Playback.cancelEndTimer()

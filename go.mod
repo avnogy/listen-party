@@ -3,8 +3,8 @@ module listen-party
 go 1.25.0
 
 require (
-	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/pocketbase/pocketbase v0.39.3
+	github.com/tommyo123/mtag v1.0.2
 	modernc.org/sqlite v1.52.0
 )
 
@@ -30,7 +30,6 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/net v0.55.0 // indirect

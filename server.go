@@ -29,6 +29,13 @@ type Server struct {
 	ConfigPath     string
 	configMu       sync.RWMutex
 	configUpdateMu sync.Mutex
+	viewCacheMu    sync.Mutex
+	viewCache      map[string]viewTrackCache
+}
+
+type viewTrackCache struct {
+	revision uint64
+	tracks   map[string]musiclib.Track
 }
 
 const maxFolderImportFiles = 50_000
@@ -183,6 +190,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
+		"audio_extensions":    musiclib.AudioExtensions(),
 		"default_room_id":     s.Rooms.DefaultID(),
 		"rooms":               summaries,
 		"permissions":         permissions,
@@ -264,12 +272,26 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ticker.C:
-			if !s.writeEvent(w, r, room.Playback.Snapshot()) {
+			if !writePing(w) {
 				slog.Info("listener heartbeat write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 		}
 	}
+}
+
+func writePing(w http.ResponseWriter) bool {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		slog.Debug("set sse ping write deadline", "error", err)
+	}
+	if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+		slog.Warn("write sse ping", "error", err)
+		return false
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return true
 }
 
 func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state PlaybackState) bool {
@@ -1198,7 +1220,9 @@ func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
 func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	slog.Info("library rescan started", "remote", r.RemoteAddr)
-	if err := s.Library.Scan(r.Context()); err != nil {
+	err := s.Library.Scan(r.Context())
+	s.invalidateViewCache()
+	if err != nil {
 		if errors.Is(err, musiclib.ErrScanInProgress) {
 			slog.Info("library rescan ignored; already scanning", "remote", r.RemoteAddr)
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -1239,7 +1263,9 @@ func (s *Server) handleRescanDir(w http.ResponseWriter, r *http.Request) {
 
 	started := time.Now()
 	slog.Info("library directory rescan started", "remote", r.RemoteAddr, "music_dir", dir)
-	if err := s.Library.ScanDir(r.Context(), dir); err != nil {
+	err := s.Library.ScanDir(r.Context(), dir)
+	s.invalidateViewCache()
+	if err != nil {
 		if errors.Is(err, musiclib.ErrScanInProgress) {
 			slog.Info("library directory rescan ignored; already scanning", "remote", r.RemoteAddr, "music_dir", dir)
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -1276,7 +1302,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer media.Close()
-	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Type", media.ContentType())
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeContent(w, r, media.Name(), media.ModTime(), media)
 }
@@ -1348,7 +1374,7 @@ func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState,
 	for _, item := range state.History {
 		keys = append(keys, item.DedupeKey)
 	}
-	tracks, err := s.Library.ListByDedupeKeys(ctx, keys)
+	tracks, err := s.cachedViewTracks(ctx, state, keys)
 	if err != nil {
 		return ViewState{}, err
 	}
@@ -1376,6 +1402,34 @@ func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState,
 		view.History = append(view.History, viewItem)
 	}
 	return view, nil
+}
+
+func (s *Server) cachedViewTracks(ctx context.Context, state PlaybackState, keys []string) (map[string]musiclib.Track, error) {
+	s.viewCacheMu.Lock()
+	defer s.viewCacheMu.Unlock()
+	if cached, ok := s.viewCache[state.RoomID]; ok {
+		if cached.revision == state.Revision {
+			return cached.tracks, nil
+		}
+		if cached.revision > state.Revision {
+			return s.Library.ListByDedupeKeys(ctx, keys)
+		}
+	}
+	tracks, err := s.Library.ListByDedupeKeys(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	if s.viewCache == nil {
+		s.viewCache = make(map[string]viewTrackCache)
+	}
+	s.viewCache[state.RoomID] = viewTrackCache{revision: state.Revision, tracks: tracks}
+	return tracks, nil
+}
+
+func (s *Server) invalidateViewCache() {
+	s.viewCacheMu.Lock()
+	clear(s.viewCache)
+	s.viewCacheMu.Unlock()
 }
 
 func (s *Server) viewStateForRequest(r *http.Request, state PlaybackState) (ViewState, error) {

@@ -283,6 +283,27 @@ func (p *Playback) Ended(dedupeKey string) PlaybackState {
 	return p.stateLocked()
 }
 
+// Discard removes an unavailable track without placing it in history.
+func (p *Playback) Discard(dedupeKey string) (PlaybackState, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.current != dedupeKey {
+		return p.stateLocked(), false
+	}
+	if p.endTimer != nil {
+		p.endTimer.Stop()
+	}
+	p.endTimer = nil
+	p.queue = slices.DeleteFunc(p.queue, func(item PlaybackItem) bool { return item.DedupeKey == dedupeKey })
+	if p.autoDJNext == dedupeKey {
+		p.autoDJNext = ""
+	}
+	p.current = ""
+	p.startNextLocked()
+	return p.stateLocked(), true
+}
+
 func (p *Playback) endScheduled(dedupeKey string, startedAt time.Time) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -769,8 +790,8 @@ func (p *Playback) recordCurrentLocked() {
 		return
 	}
 	p.history = append([]PlaybackItem{{DedupeKey: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy, Source: p.currentSource}}, p.history...)
-	if len(p.history) > 25 {
-		p.history = p.history[:25]
+	if len(p.history) > 15 {
+		p.history = p.history[:15]
 	}
 }
 

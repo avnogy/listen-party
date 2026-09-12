@@ -20,11 +20,13 @@ function init() {
       return;
     }
     autoDJSourceMenu.replaceChildren();
+		autoDJSourceMenu.scrollTop = 0;
     const loading = document.createElement("p");
     loading.className = "auto-dj-source-status";
     loading.textContent = "Loading sources...";
     autoDJSourceMenu.append(loading);
     autoDJSourceMenu.hidden = false;
+    positionAutoDJSourceMenu();
     autoDJSourceButton.setAttribute("aria-expanded", "true");
     try {
       const availablePlaylists = await apiModule.api("/api/playlists");
@@ -34,6 +36,12 @@ function init() {
     } catch (err) {
       console.error(err);
       loading.textContent = err.message || "Could not load shuffle sources";
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    if (!autoDJSourceMenu.hidden) {
+      positionAutoDJSourceMenu();
     }
   });
 }
@@ -92,6 +100,24 @@ function renderAutoDJSourceMenu(availablePlaylists) {
       return item;
     }),
   );
+  autoDJSourceMenu.scrollTop = 0;
+  positionAutoDJSourceMenu();
+}
+
+function positionAutoDJSourceMenu() {
+  const gap = 8;
+  const source = autoDJSourceButton.getBoundingClientRect();
+  const above = Math.max(0, source.top - gap);
+  const below = Math.max(0, innerHeight - source.bottom - gap);
+  if (below >= above) {
+    autoDJSourceMenu.style.top = `calc(100% + ${gap}px)`;
+    autoDJSourceMenu.style.bottom = "auto";
+    autoDJSourceMenu.style.maxHeight = `${below}px`;
+    return;
+  }
+  autoDJSourceMenu.style.top = "auto";
+  autoDJSourceMenu.style.bottom = `calc(100% + ${gap}px)`;
+  autoDJSourceMenu.style.maxHeight = `${above}px`;
 }
 
 export default { init, closeAutoDJSourceMenu, renderAutoDJSourceMenu };

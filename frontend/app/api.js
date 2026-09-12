@@ -6,6 +6,10 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
+  if (res.status === 401) {
+    location.replace("/logout");
+    throw new Error("authentication required");
+  }
   if (!res.ok) {
     throw new Error(await res.text());
   }

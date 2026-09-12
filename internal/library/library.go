@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/dhowden/tag"
+	"github.com/tommyo123/mtag"
 	_ "modernc.org/sqlite"
 )
 
@@ -96,7 +96,11 @@ func (m *Media) Close() error {
 }
 
 func (m *Media) Name() string {
-	return m.Track.Title + ".mp3"
+	return filepath.Base(m.Track.path)
+}
+
+func (m *Media) ContentType() string {
+	return audioMIME(m.Track.path)
 }
 
 func (m *Media) ModTime() time.Time {
@@ -121,7 +125,7 @@ type ScanStatus struct {
 	LastCompleted       time.Time `json:"last_completed"`
 	LastError           string    `json:"last_error"`
 	DurationMS          int64     `json:"duration_ms"`
-	MP3Seen             int       `json:"mp3_seen"`
+	AudioSeen           int       `json:"audio_seen"`
 	Parsed              int64     `json:"parsed"`
 	Indexed             int64     `json:"indexed"`
 	Unchanged           int       `json:"unchanged"`
@@ -149,6 +153,7 @@ const (
 	scanPathBufferSize     = 4096
 	scanMaxWorkers         = 256
 	scanProgressLogEvery   = 5 * time.Second
+	librarySchemaVersion   = "2"
 )
 
 const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available`
@@ -198,24 +203,31 @@ func (l *Library) Close() error {
 }
 
 func (l *Library) migrate(ctx context.Context) error {
-	reset, err := l.trackSchemaNeedsReset(ctx)
+	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	ftsExists, err := l.tableExists(ctx, "tracks_fts")
-	if err != nil {
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS library_metadata (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+)`); err != nil {
 		return err
 	}
-	if reset {
-		if _, err := l.db.ExecContext(ctx, `
+	var version string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM library_metadata WHERE key = 'schema_version'`).Scan(&version)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if version == librarySchemaVersion {
+		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `
+DROP TABLE IF EXISTS playlist_items;
+DROP TABLE IF EXISTS room_playback_state;
 DROP TABLE IF EXISTS tracks_fts;
-DROP TABLE tracks;
-`); err != nil {
-			return err
-		}
-		ftsExists = false
-	}
-	_, err = l.db.ExecContext(ctx, `
+DROP TABLE IF EXISTS tracks;
 CREATE TABLE IF NOT EXISTS tracks (
 	id INTEGER PRIMARY KEY,
 	path TEXT NOT NULL UNIQUE,
@@ -269,196 +281,22 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 );
 CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items(playlist_id, position);
 CREATE INDEX IF NOT EXISTS playlist_items_playlist_dedupe_idx ON playlist_items(playlist_id, dedupe_key);
-`)
-	if err != nil {
-		return err
-	}
-	if err := l.ensureTrackKeyColumns(ctx); err != nil {
-		return err
-	}
-	if err := l.ensureRoomPlaybackStateTable(ctx); err != nil {
-		return err
-	}
-	if _, err := l.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tracks_dedupe_idx ON tracks(dedupe_key, available)`); err != nil {
-		return err
-	}
-	if !ftsExists {
-		_, err = l.db.ExecContext(ctx, `INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')`)
-	}
-	return err
-}
-
-func (l *Library) ensureRoomPlaybackStateTable(ctx context.Context) error {
-	rows, err := l.db.QueryContext(ctx, `PRAGMA table_info(room_playback_state)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	columns := map[string]string{}
-	roomIDPrimaryKey := false
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		columns[name] = columnType
-		if name == "room_id" && primaryKey == 1 {
-			roomIDPrimaryKey = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if roomIDPrimaryKey && strings.EqualFold(columns["room_id"], "TEXT") &&
-		strings.EqualFold(columns["revision"], "INTEGER") &&
-		strings.EqualFold(columns["state_json"], "BLOB") &&
-		strings.EqualFold(columns["updated_at"], "INTEGER") {
-		return nil
-	}
-
-	if len(columns) > 0 {
-		slog.Warn("reset incompatible playback recovery storage")
-	}
-	tx, err := l.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS room_playback_state`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS tracks_dedupe_idx ON tracks(dedupe_key, available);
 CREATE TABLE room_playback_state (
 	room_id TEXT PRIMARY KEY,
 	revision INTEGER NOT NULL,
 	state_json BLOB NOT NULL,
 	updated_at INTEGER NOT NULL
-)`); err != nil {
+);
+INSERT INTO library_metadata(key, value) VALUES ('schema_version', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, librarySchemaVersion); err != nil {
 		return err
-	}
-	return tx.Commit()
-}
-
-func (l *Library) ensureTrackKeyColumns(ctx context.Context) error {
-	rows, err := l.db.QueryContext(ctx, `PRAGMA table_info(tracks)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var columnName, columnType string
-		var notNull, pk int
-		var defaultValue any
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		columns[columnName] = true
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !columns["dedupe_key"] {
-		if _, err := l.db.ExecContext(ctx, `ALTER TABLE tracks ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-	if !columns["match_key"] {
-		if _, err := l.db.ExecContext(ctx, `ALTER TABLE tracks ADD COLUMN match_key TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-	return l.backfillTrackKeys(ctx)
-}
-
-func (l *Library) backfillTrackKeys(ctx context.Context) error {
-	rows, err := l.db.QueryContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE dedupe_key = '' OR match_key = ''`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var tracks []Track
-	for rows.Next() {
-		t, err := scanTrack(rows)
-		if err != nil {
-			return err
-		}
-		setTrackKeys(&t)
-		tracks = append(tracks, t)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	tx, err := l.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
-		}
-	}()
-	stmt, err := tx.PrepareContext(ctx, `UPDATE tracks SET dedupe_key = ?, match_key = ? WHERE id = ?`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, t := range tracks {
-		if _, err := stmt.ExecContext(ctx, t.DedupeKey, t.MatchKey, t.ID); err != nil {
-			return err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	committed = true
+	slog.Warn("reset library content state; retained playlists; reindex required", "schema_version", librarySchemaVersion)
 	return nil
-}
-
-func (l *Library) trackSchemaNeedsReset(ctx context.Context) (bool, error) {
-	exists, err := l.tableExists(ctx, "tracks")
-	if err != nil {
-		return false, err
-	}
-	if !exists {
-		return false, nil
-	}
-
-	rows, err := l.db.QueryContext(ctx, `PRAGMA table_info(tracks)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	columns := make(map[string]bool)
-	for rows.Next() {
-		var cid int
-		var columnName, columnType string
-		var notNull, pk int
-		var defaultValue any
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return false, err
-		}
-		columns[columnName] = true
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return columns["search_title"] || columns["search_artist"] || columns["search_album"] || columns["search_text"], nil
-}
-
-func (l *Library) tableExists(ctx context.Context, name string) (bool, error) {
-	var found string
-	err := l.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&found)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 func (l *Library) loadKnownTracks(ctx context.Context, roots []string) (map[string]int64, error) {
@@ -800,12 +638,25 @@ WHERE id = ? AND available = 1`, id)
 		return Track{}, err
 	}
 	if fillDuration && track.DurationMS == 0 {
-		track.DurationMS = mp3DurationMS(track.path)
+		track.DurationMS = audioDurationMS(track.path)
 		if track.DurationMS > 0 {
 			_, _ = l.db.ExecContext(ctx, `UPDATE tracks SET duration_ms = ? WHERE id = ?`, track.DurationMS, id)
 		}
 	}
 	return track, nil
+}
+
+func audioDurationMS(path string) int64 {
+	file, err := mtag.Open(path,
+		mtag.WithReadOnly(),
+		mtag.WithSkipPictures(),
+		mtag.WithAudioPropertiesStyle(mtag.AudioPropertiesAccurate),
+	)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+	return file.AudioProperties().Duration.Milliseconds()
 }
 
 func (l *Library) EnsureDuration(id int64) <-chan struct{} {
@@ -898,25 +749,32 @@ func (l *Library) Artwork(ctx context.Context, id int64) ([]byte, string, error)
 	if err != nil {
 		return nil, "", err
 	}
-	file, err := os.Open(track.path)
+	file, err := mtag.Open(track.path, mtag.WithReadOnly())
 	if err != nil {
 		return nil, "", err
 	}
 	defer file.Close()
 
-	meta, err := tag.ReadFrom(file)
-	if err != nil {
+	var selected mtag.Picture
+	for _, picture := range file.Images() {
+		if len(picture.Data) == 0 {
+			continue
+		}
+		if len(selected.Data) == 0 || picture.Type == mtag.PictureCoverFront {
+			selected = picture
+		}
+		if picture.Type == mtag.PictureCoverFront {
+			break
+		}
+	}
+	if len(selected.Data) == 0 {
 		return nil, "", ErrTrackNotFound
 	}
-	picture := meta.Picture()
-	if picture == nil || len(picture.Data) == 0 {
-		return nil, "", ErrTrackNotFound
-	}
-	mimeType := picture.MIMEType
+	mimeType := selected.MIME
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
-	return picture.Data, mimeType, nil
+	return selected.Data, mimeType, nil
 }
 
 func (l *Library) CreatePlaylist(ctx context.Context, name, ownerID string) (Playlist, error) {
@@ -1019,7 +877,7 @@ func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID int64, dedupe
 func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, files []FolderManifestFile) (PlaylistFolderImport, error) {
 	result := PlaylistFolderImport{}
 	if len(files) == 0 {
-		return result, errors.New("folder contains no MP3 files")
+		return result, errors.New("folder contains no supported audio files")
 	}
 	type indexedFile struct {
 		path      string
@@ -1079,7 +937,7 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 	matched := make([]indexedFile, 0, len(files))
 	for _, manifest := range files {
 		relative, ok := cleanManifestPath(manifest.RelativePath)
-		if !ok || !isMP3(relative) {
+		if !ok || !isSupportedAudio(relative) {
 			result.Unmatched++
 			continue
 		}
@@ -1365,10 +1223,6 @@ func (l *Library) ScanStatus() ScanStatus {
 	return l.status
 }
 
-func isMP3(path string) bool {
-	return strings.EqualFold(filepath.Ext(path), ".mp3")
-}
-
 func shouldIgnoreDir(name string) bool {
 	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "__") {
 		return true
@@ -1467,7 +1321,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 		}
 		l.statusMu.Lock()
 		l.status.DurationMS = elapsed.Milliseconds()
-		l.status.MP3Seen = seen
+		l.status.AudioSeen = seen
 		l.status.Parsed = atomic.LoadInt64(&parsed)
 		l.status.Indexed = atomic.LoadInt64(&indexed)
 		l.status.Unchanged = unchanged
@@ -1481,7 +1335,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 		l.statusMu.Unlock()
 		slog.Info("library scan progress",
 			"duration", elapsed,
-			"mp3_seen", seen,
+			"audio_seen", seen,
 			"parsed", atomic.LoadInt64(&parsed),
 			"indexed", atomic.LoadInt64(&indexed),
 			"pending_paths", len(paths),
@@ -1530,7 +1384,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 					track, err := readTrack(file.path, file.info)
 					if err != nil {
 						atomic.AddInt64(&skipped, 1)
-						slog.Warn("skip unreadable mp3", "path", file.path, "error", err)
+						slog.Warn("skip unreadable audio", "path", file.path, "error", err)
 						continue
 					}
 					atomic.AddInt64(&parsed, 1)
@@ -1563,7 +1417,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 				}
 				return nil
 			}
-			if !isMP3(path) {
+			if !isSupportedAudio(path) {
 				return nil
 			}
 			seen++
@@ -1571,7 +1425,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 			if err != nil {
 				atomic.AddInt64(&skipped, 1)
 				delete(known, path)
-				slog.Warn("skip unreadable mp3 info", "path", path, "error", err)
+				slog.Warn("skip unreadable audio info", "path", path, "error", err)
 				logProgress(false)
 				return nil
 			}
@@ -1626,7 +1480,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 	l.statusMu.Lock()
 	l.status.Removed = removed
 	l.statusMu.Unlock()
-	slog.Info("library scan committed", "duration", time.Since(started), "music_dirs", len(dirs), "scan_workers", workers, "mp3_seen", seen, "parsed", atomic.LoadInt64(&parsed), "indexed", atomic.LoadInt64(&indexed), "unchanged", unchanged, "ignored_dirs", ignoredDirs, "skipped", atomic.LoadInt64(&skipped), "removed", removed, "deletion_pass", !walkFailed)
+	slog.Info("library scan committed", "duration", time.Since(started), "music_dirs", len(dirs), "scan_workers", workers, "audio_seen", seen, "parsed", atomic.LoadInt64(&parsed), "indexed", atomic.LoadInt64(&indexed), "unchanged", unchanged, "ignored_dirs", ignoredDirs, "skipped", atomic.LoadInt64(&skipped), "removed", removed, "deletion_pass", !walkFailed)
 	return nil
 }
 
@@ -1644,23 +1498,26 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 		ModTime: info.ModTime(),
 	}
 
-	f, err := os.Open(path)
+	f, err := mtag.Open(path,
+		mtag.WithReadOnly(),
+		mtag.WithSkipPictures(),
+		mtag.WithAudioPropertiesStyle(mtag.AudioPropertiesFast),
+	)
 	if err != nil {
 		return Track{}, err
 	}
 	defer f.Close()
-
-	meta, err := tag.ReadFrom(f)
-	if err == nil {
-		if meta.Title() != "" {
-			t.Title = meta.Title()
-		}
-		if meta.Artist() != "" {
-			t.Artist = meta.Artist()
-		}
-		t.Album = meta.Album()
-		t.TrackNo, _ = meta.Track()
+	if f.AudioProperties().Codec == "" {
+		return Track{}, errors.New("unrecognized audio stream")
 	}
+	if value := f.Title(); value != "" {
+		t.Title = value
+	}
+	if value := f.Artist(); value != "" {
+		t.Artist = value
+	}
+	t.Album = f.Album()
+	t.TrackNo = f.Track()
 	normalizeTrackDisplay(&t)
 	return t, nil
 }

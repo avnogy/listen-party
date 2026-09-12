@@ -83,7 +83,9 @@ func main() {
 	go func() {
 		scanStarted := time.Now()
 		slog.Info("initial library scan started", "music_dirs", len(cfg.MusicDirs), "scan_workers", cfg.ScanWorkers)
-		if err := lib.Scan(serverCtx); err != nil {
+		err := lib.Scan(serverCtx)
+		app.invalidateViewCache()
+		if err != nil {
 			if err == context.Canceled {
 				slog.Info("initial library scan canceled", "duration", time.Since(scanStarted))
 				return

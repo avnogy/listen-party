@@ -405,9 +405,12 @@ input[type="range"]:disabled {
   width: max-content;
   min-width: 190px;
   max-width: min(320px, calc(100vw - 24px));
-  max-height: min(360px, 60vh);
+  max-height: 360px;
   padding: 6px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel-2);

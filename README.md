@@ -1,6 +1,6 @@
 # listen-party
 
-`listen-party` is a self-hosted MP3 player for offices and trusted LANs. It
+`listen-party` is a self-hosted music player for offices and trusted LANs. It
 indexes local music, provides shared playback rooms, and keeps connected
 browsers synchronized.
 
@@ -10,7 +10,7 @@ authentication are stored beside the configuration file.
 
 ## Features
 
-- Recursive MP3 indexing and title, artist, or album search.
+- Recursive audio indexing and title, artist, or album search.
 - Multiple rooms with independent playback, queue, and history state.
 - Shared play/pause, seek, skip, previous, and play-now controls.
 - Queue add, remove, clear, and drag-and-drop reordering.
@@ -51,6 +51,9 @@ Create application users in the `users` collection with:
 - Optional `app_role` set to `admin` for application administration.
 
 Application users sign in at `http://localhost:8080/login`.
+
+Application sessions last seven days. When a protected request or room-event
+reconnect confirms that a session has expired, the browser returns to sign-in.
 
 ## Docker
 
@@ -288,7 +291,7 @@ Auto-DJ playlist shuffling uses the room's `queue_manage` permission.
 Playlist viewing and ownership are independent of room permissions.
 
 Playlist owners and application admins can use **Import from path...** to
-append MP3s from a folder selected with the browser's native directory picker.
+append supported audio files from a folder selected with the browser's native directory picker.
 The browser sends only relative filenames, sizes, and modification times;
 audio files are not uploaded. The server imports matches from its existing
 index and reports unmatched or ambiguous files. The selected network share
@@ -300,10 +303,12 @@ server, though their mount paths may differ.
 The server reconciles every configured music directory at startup. Use
 **Rescan** in `/admin` to reconcile all configured directories or the button
 beside a directory to reconcile only that path. Scans are incremental: unchanged
-files are skipped, changed and new MP3s are indexed, and missing files are
+files are skipped, changed and new audio files are indexed, and missing files are
 removed from the active index.
 
-Indexing reads filesystem information and basic MP3 tags. Track duration is
+Supported extensions are `.mp3`, `.m4a`, `.m4b`, `.aac`, `.flac`, `.wav`,
+`.aif`, `.aiff`, `.ogg`, `.oga`, and `.opus`. Indexing reads filesystem
+information and basic tags. Track duration is
 calculated lazily during use and cached; scans do not read entire audio files to
 calculate duration.
 
@@ -311,9 +316,9 @@ calculate duration.
 for local storage; reduce it for slow or heavily shared NAS mounts. More workers
 can increase storage pressure without making a constrained share faster.
 
-Only MP3 files are indexed. Playlists retain their stored entries when a file
-is temporarily unavailable, but unavailable tracks cannot be played until the
-library can resolve them again.
+Playlists retain their stored entries when a file is temporarily unavailable,
+but unavailable tracks are removed from active playback and queue progression
+continues.
 
 To deliberately rebuild only the track index, first stop and back up the server,
 then run:
@@ -372,7 +377,7 @@ Restart the server after changing authentication settings.
 Build for the current platform:
 
 ```sh
-go build -o build/lp .
+go build -trimpath -ldflags="-s -w" -o build/lp .
 ```
 
 Build Linux and Windows AMD64 binaries:
@@ -395,7 +400,7 @@ library database; handle them as sensitive backups.
 
 - Each room accepts up to 200 upcoming queue items.
 - Room queues, current playback, history, and Auto-DJ state are held in memory
-  and reset when the server restarts. Playlists and library metadata persist.
+  and persisted for restart recovery. Playlists and library metadata persist.
 - Users stream media directly from the server, so network and disk throughput
   scale with the number of listening browsers.
 
@@ -412,7 +417,7 @@ library database; handle them as sensitive backups.
 ```sh
 go test ./...
 go test -race ./...
-go build -o build/lp .
+go build -trimpath -ldflags="-s -w" -o build/lp .
 ```
 
 Build and run the local image with Docker Compose:

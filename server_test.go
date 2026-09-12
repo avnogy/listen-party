@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tcolgate/mp3"
 
 	musiclib "listen-party/internal/library"
 )
@@ -40,6 +39,13 @@ func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 	if err != nil || len(tracks) != 2 {
 		t.Fatalf("tracks = %#v, err = %v", tracks, err)
 	}
+	byTitle := map[string]musiclib.Track{}
+	for _, track := range tracks {
+		byTitle[track.Title] = track
+	}
+	if err := os.Remove(filepath.Join(dir, "Artist - First.mp3")); err != nil {
+		t.Fatal(err)
+	}
 	server := testServer(&Server{
 		Auth:    fakeAuth{user: UserInfo{Username: "alice", Groups: []string{"staff"}}},
 		Library: lib,
@@ -51,8 +57,11 @@ func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 	})
 	defer server.Rooms.Close()
 
-	postCommand(t, server, fmt.Sprintf(`{"action":"play_now","dedupe_key":%q}`, tracks[0].DedupeKey))
-	postCommand(t, server, fmt.Sprintf(`{"action":"queue_add","dedupe_key":%q}`, tracks[1].DedupeKey))
+	postCommand(t, server, fmt.Sprintf(`{"action":"queue_add","dedupe_key":%q}`, byTitle["Second"].DedupeKey))
+	view := postCommand(t, server, fmt.Sprintf(`{"action":"play_now","dedupe_key":%q}`, byTitle["First"].DedupeKey))
+	if view.Current.DedupeKey != byTitle["Second"].DedupeKey || len(view.History) != 0 || len(view.Actions) == 0 || view.Actions[0].Username != "System" {
+		t.Fatalf("unavailable track recovery = %#v", view)
+	}
 	time.Sleep(50 * time.Millisecond)
 	paused := postCommand(t, server, `{"action":"pause"}`)
 	time.Sleep(350 * time.Millisecond)
@@ -73,11 +82,9 @@ func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 }
 
 func testMP3Frames(count int) []byte {
-	data := make([]byte, 0, count*len(mp3.SilentBytes))
-	for range count {
-		data = append(data, mp3.SilentBytes...)
-	}
-	return data
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
+	return bytes.Repeat(frame, count)
 }
 
 func TestAdminPageRequiresAdminCredentials(t *testing.T) {
@@ -438,7 +445,7 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, name := range []string{"Artist - First.mp3", "Artist - Second.mp3"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), testMP3Frames(12), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -551,7 +558,7 @@ func TestPlaylistOwnerImportsNativeFolderManifest(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte("legacy-track")
+	data := testMP3Frames(12)
 	trackPath := filepath.Join(dir, "Artist - Song.mp3")
 	if err := os.WriteFile(trackPath, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -831,6 +838,16 @@ func TestDisconnectSSEEventIsTerminal(t *testing.T) {
 	}
 }
 
+func TestSSEPingIsNotState(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if !writePing(rec) {
+		t.Fatal("ping write failed")
+	}
+	if got := rec.Body.String(); got != ": ping\n\n" {
+		t.Fatalf("ping = %q", got)
+	}
+}
+
 func TestGlobalConfigUpdateRejectsStaleRevision(t *testing.T) {
 	server := testServer(&Server{
 		Auth:   fakeAuth{user: UserInfo{Username: "admin", Role: RoleAdmin}},
@@ -891,7 +908,7 @@ func actionLogTestServer(t *testing.T) (*Server, map[string]musiclib.Track) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, title := range []string{"First", "Second", "Third"} {
-		if err := os.WriteFile(filepath.Join(dir, "Artist - "+title+".mp3"), []byte(title), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "Artist - "+title+".mp3"), testMP3Frames(12), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

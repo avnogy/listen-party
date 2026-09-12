@@ -252,7 +252,7 @@ function connectEvents() {
   });
   events.addEventListener("error", async () => {
     try {
-      const info = await apiModule.api("/api/session");
+      const info = await apiModule.api("/api/session", { cache: "no-store" });
       if (roomID === currentRoomID && info.disconnected?.[roomID]) {
         forceLogout();
       }

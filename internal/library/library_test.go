@@ -1,6 +1,7 @@
 package library_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -14,12 +15,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func validTestMP3(prefix []byte) []byte {
+	frame := make([]byte, 417)
+	copy(frame, []byte{0xff, 0xfb, 0x90, 0x64})
+	return append(append([]byte(nil), prefix...), bytes.Repeat(frame, 12)...)
+}
+
 func TestArtworkReadsEmbeddedPicture(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "with-art.mp3")
 	want := []byte{0xff, 0xd8, 0xff, 0xd9}
-	if err := os.WriteFile(path, id3v23PictureTag(want), 0o644); err != nil {
+	if err := os.WriteFile(path, validTestMP3(id3v23PictureTag(want)), 0o644); err != nil {
 		t.Fatalf("write mp3: %v", err)
 	}
 
@@ -48,7 +55,7 @@ func TestScanIndexesFilenameFallbackAndSearch(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Alex Clare - Too Close [zP5OEwh31E4].mp3")
-	if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+	if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 		t.Fatalf("write mp3: %v", err)
 	}
 
@@ -73,11 +80,133 @@ func TestScanIndexesFilenameFallbackAndSearch(t *testing.T) {
 	}
 }
 
+func TestScanSkipsMalformedSupportedAudio(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.mp3"), validTestMP3(nil), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken.ogg"), []byte("not audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	count, err := lib.Count(ctx)
+	if err != nil || count != 1 {
+		t.Fatalf("count = %d, %v; want 1", count, err)
+	}
+	if status := lib.ScanStatus(); status.Skipped != 1 || status.Parsed != 1 {
+		t.Fatalf("status = %#v; want one parsed and one skipped", status)
+	}
+}
+
+func TestSchemaResetClearsContentStateAndPreservesPlaylists(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Artist - Track.mp3"), validTestMP3(nil), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "tracks.sqlite")
+	lib, err := musiclib.Open(ctx, dbPath, []string{dir}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tracks, err := lib.Search(ctx, "track")
+	if err != nil || len(tracks) != 1 {
+		t.Fatalf("tracks = %#v, %v", tracks, err)
+	}
+	playlist, err := lib.CreatePlaylist(ctx, "Keep me", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, tracks[0].DedupeKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.SaveRoomPlaybackSnapshot(ctx, musiclib.RoomPlaybackSnapshot{RoomID: "main", Revision: 1, State: []byte(`{"current":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Force schema creation to fail after the drops, then verify rollback.
+	if _, err := db.Exec(`
+DELETE FROM library_metadata WHERE key = 'schema_version';
+DROP INDEX tracks_dedupe_idx;
+CREATE TABLE tracks_dedupe_idx (value TEXT);`); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := musiclib.Open(ctx, dbPath, []string{dir}, 1); err == nil {
+		failed.Close()
+		t.Fatal("expected schema creation failure")
+	}
+	for _, table := range []string{"tracks", "tracks_fts", "playlist_items", "room_playback_state"} {
+		var count int
+		if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("%s after rollback: count=%d, err=%v", table, count, err)
+		}
+	}
+	var versionCount int
+	if err := db.QueryRow("SELECT count(*) FROM library_metadata").Scan(&versionCount); err != nil || versionCount != 0 {
+		t.Fatalf("schema version committed on failure: count=%d, err=%v", versionCount, err)
+	}
+	if _, err := db.Exec("DROP TABLE tracks_dedupe_idx"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	lib, err = musiclib.Open(ctx, dbPath, []string{dir}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	if count, err := lib.Count(ctx); err != nil || count != 0 {
+		t.Fatalf("count after reset = %d, %v; want 0", count, err)
+	}
+	if got, err := lib.GetPlaylist(ctx, playlist.ID); err != nil || len(got.Items) != 0 || got.Name != playlist.Name {
+		t.Fatalf("playlist after reset = %#v, %v", got, err)
+	}
+	if snapshots, err := lib.LoadRoomPlaybackSnapshots(ctx); err != nil || len(snapshots) != 0 {
+		t.Fatalf("snapshots after reset = %#v, %v", snapshots, err)
+	}
+	// A subsequent startup must preserve the rebuilt index.
+	if err := lib.Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lib, err = musiclib.Open(ctx, dbPath, []string{dir}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	if count, err := lib.Count(ctx); err != nil || count != 1 {
+		t.Fatalf("count after restart = %d, %v; want 1", count, err)
+	}
+}
+
 func TestSearchOrdersByTitleAscending(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, name := range []string{"Mix - Zeta.mp3", "Mix - alpha.mp3", "Mix - Middle.mp3"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("not really mp3"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
@@ -110,7 +239,7 @@ func TestShuffleTrackIDsListEachLogicalTrack(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for _, name := range []string{"Artist - First.mp3", "Artist - Second.mp3"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), validTestMP3(nil), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -143,7 +272,7 @@ func TestShuffleTrackIDsListEachLogicalTrack(t *testing.T) {
 func TestPlaylistShuffleItemIDsResolveAvailableItems(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "Artist - Selected.mp3"), []byte("selected"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Artist - Selected.mp3"), validTestMP3(nil), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
@@ -215,8 +344,8 @@ func TestSearchFieldFiltersTitleArtistAndAlbum(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	files := map[string][]byte{
-		"Alex Clare - Too Close.mp3": []byte("not really mp3"),
-		"album.mp3":                  id3v23TextTag(map[string]string{"TIT2": "Blue Line", "TPE1": "Massive Attack", "TALB": "Protection"}),
+		"Alex Clare - Too Close.mp3": validTestMP3(nil),
+		"album.mp3":                  validTestMP3(id3v23TextTag(map[string]string{"TIT2": "Blue Line", "TPE1": "Massive Attack", "TALB": "Protection"})),
 	}
 	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
@@ -277,7 +406,7 @@ func TestSearchDeduplicatesCopiedTracks(t *testing.T) {
 		filepath.Join(rootA, "Artist - Same Song.mp3"),
 		filepath.Join(rootB, "Artist - Same Song.mp3"),
 	} {
-		if err := os.WriteFile(path, []byte("same bytes"), 0o644); err != nil {
+		if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 		if err := os.Chtimes(path, mtime, mtime); err != nil {
@@ -330,7 +459,7 @@ func TestPlaylistResolvesRemainingDuplicateAfterRescan(t *testing.T) {
 	pathA := filepath.Join(rootA, "Artist - Same Song.mp3")
 	pathB := filepath.Join(rootB, "Artist - Same Song.mp3")
 	for _, path := range []string{pathA, pathB} {
-		if err := os.WriteFile(path, []byte("same bytes"), 0o644); err != nil {
+		if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 		if err := os.Chtimes(path, mtime, mtime); err != nil {
@@ -383,7 +512,7 @@ func TestRemovePlaylistItemAndPlaylist(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Artist - Track.mp3")
-	if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+	if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 		t.Fatalf("write mp3: %v", err)
 	}
 	lib, err := musiclib.Open(ctx, filepath.Join(t.TempDir(), "tracks.sqlite"), []string{dir}, 1)
@@ -451,7 +580,7 @@ func TestImportPlaylistFolderMatchesIndexedManifest(t *testing.T) {
 	names := []string{"01 - First.mp3", "02 - Second.mp3"}
 	manifest := make([]musiclib.FolderManifestFile, 0, len(names)+1)
 	for _, name := range names {
-		data := []byte("contents-" + name)
+		data := validTestMP3(nil)
 		fullPath := filepath.Join(dir, name)
 		if err := os.WriteFile(fullPath, data, 0o644); err != nil {
 			t.Fatal(err)
@@ -523,7 +652,7 @@ func TestScanSkipsUnchangedFiles(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "same.mp3")
-	if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+	if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 		t.Fatalf("write mp3: %v", err)
 	}
 
@@ -550,7 +679,7 @@ func TestScanDeletesMissingTracksAfterSuccessfulWalk(t *testing.T) {
 	keepPath := filepath.Join(dir, "keep.mp3")
 	removePath := filepath.Join(dir, "remove.mp3")
 	for _, path := range []string{keepPath, removePath} {
-		if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+		if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
@@ -585,7 +714,7 @@ func TestScanDirDeletesOnlyMissingTracksUnderThatDirectory(t *testing.T) {
 	removePath := filepath.Join(rootA, "remove.mp3")
 	keepPath := filepath.Join(rootB, "keep.mp3")
 	for _, path := range []string{removePath, keepPath} {
-		if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+		if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
@@ -653,7 +782,7 @@ func TestScanSkipsIgnoredDirectories(t *testing.T) {
 		}
 	}
 	for _, path := range []string{visiblePath, hiddenPath, nodePath} {
-		if err := os.WriteFile(path, []byte("not really mp3"), 0o644); err != nil {
+		if err := os.WriteFile(path, validTestMP3(nil), 0o644); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
