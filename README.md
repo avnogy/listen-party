@@ -147,6 +147,10 @@ For routine upgrades:
 3. Replace the binary and restart it with the same `-config` argument.
 4. Check `/healthz`, the application, and the log for startup or migration errors.
 
+Some upgrades may re-read existing audio metadata once to populate new index
+fields. Keep the SQLite database in place during upgrades; deleting it deletes
+the stored playlists and playlist items.
+
 Logs are written to stdout and to:
 
 ```text
@@ -308,9 +312,11 @@ removed from the active index.
 
 Supported extensions are `.mp3`, `.m4a`, `.m4b`, `.aac`, `.flac`, `.wav`,
 `.aif`, `.aiff`, `.ogg`, `.oga`, and `.opus`. Indexing reads filesystem
-information and basic tags. Track duration is
-calculated lazily during use and cached; scans do not read entire audio files to
-calculate duration.
+information, basic tags, and lightweight format properties such as lossy versus
+lossless encoding and bitrate. When copies share the same artist, title, album,
+and track metadata, search returns one result and prefers lossless and higher-
+bitrate copies. Track duration is calculated lazily during use and cached;
+scans do not decode audio or read entire files to calculate duration.
 
 `scan_workers` controls concurrent metadata readers. The default is suitable
 for local storage; reduce it for slow or heavily shared NAS mounts. More workers

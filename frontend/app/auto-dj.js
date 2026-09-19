@@ -20,7 +20,7 @@ function init() {
       return;
     }
     autoDJSourceMenu.replaceChildren();
-		autoDJSourceMenu.scrollTop = 0;
+    autoDJSourceMenu.scrollTop = 0;
     const loading = document.createElement("p");
     loading.className = "auto-dj-source-status";
     loading.textContent = "Loading sources...";
@@ -108,7 +108,7 @@ function positionAutoDJSourceMenu() {
   const gap = 8;
   const source = autoDJSourceButton.getBoundingClientRect();
   const above = Math.max(0, source.top - gap);
-  const below = Math.max(0, innerHeight - source.bottom - gap);
+  const below = Math.max(0, window.innerHeight - source.bottom - gap);
   if (below >= above) {
     autoDJSourceMenu.style.top = `calc(100% + ${gap}px)`;
     autoDJSourceMenu.style.bottom = "auto";

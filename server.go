@@ -244,11 +244,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	slog.Info("listener connected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", len(room.Playback.Snapshot().Listeners))
-	defer func() {
-		cancel()
-		slog.Info("listener disconnected", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "listener_count", len(room.Playback.Snapshot().Listeners))
-	}()
+	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	lifetime := time.NewTimer(10 * time.Minute)
@@ -257,23 +253,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-			slog.Info("listener request closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID, "error", r.Context().Err())
 			return
 		case <-lifetime.C:
-			slog.Info("listener refresh requested", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 			return
 		case state, ok := <-ch:
 			if !ok {
-				slog.Info("listener subscription closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 			if !s.writeEvent(w, r, state) {
-				slog.Info("listener sse write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 		case <-ticker.C:
 			if !writePing(w) {
-				slog.Info("listener heartbeat write closed", "remote", r.RemoteAddr, "username", user.Username, "room", room.ID)
 				return
 			}
 		}

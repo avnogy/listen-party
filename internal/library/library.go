@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +35,11 @@ type Track struct {
 	ModTime    time.Time `json:"mod_time"`
 	DedupeKey  string    `json:"dedupe_key"`
 	MatchKey   string    `json:"match_key"`
-	Available  bool      `json:"available"`
+	// ContentKey is a metadata identity used only for search dedupe.
+	ContentKey string `json:"-"`
+	Lossless   bool   `json:"lossless"`
+	Bitrate    int    `json:"bitrate"`
+	Available  bool   `json:"available"`
 }
 
 type Playlist struct {
@@ -153,11 +159,11 @@ const (
 	scanPathBufferSize     = 4096
 	scanMaxWorkers         = 256
 	scanProgressLogEvery   = 5 * time.Second
-	librarySchemaVersion   = "2"
+	librarySchemaVersion   = "3"
 )
 
-const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available`
-const qualifiedTrackSelectColumns = `t.id, t.path, t.title, t.artist, t.album, t.track_no, t.duration_ms, t.size, t.mod_time, t.dedupe_key, t.match_key, t.available`
+const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, content_key, lossless, bitrate_bps, available`
+const qualifiedTrackSelectColumns = `t.id, t.path, t.title, t.artist, t.album, t.track_no, t.duration_ms, t.size, t.mod_time, t.dedupe_key, t.match_key, t.content_key, t.lossless, t.bitrate_bps, t.available`
 
 func Open(ctx context.Context, path string, dirs []string, workers int) (*Library, error) {
 	db, err := openDB(path)
@@ -223,6 +229,19 @@ CREATE TABLE IF NOT EXISTS library_metadata (
 	if version == librarySchemaVersion {
 		return tx.Commit()
 	}
+	if version == "2" {
+		if _, err := tx.ExecContext(ctx, `
+ALTER TABLE tracks ADD COLUMN content_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE tracks ADD COLUMN lossless INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracks ADD COLUMN bitrate_bps INTEGER NOT NULL DEFAULT 0;
+UPDATE tracks SET content_key = 'legacy:' || id;`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE library_metadata SET value = ? WHERE key = 'schema_version'`, librarySchemaVersion); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `
 DROP TABLE IF EXISTS playlist_items;
 DROP TABLE IF EXISTS room_playback_state;
@@ -240,6 +259,9 @@ CREATE TABLE IF NOT EXISTS tracks (
 	mod_time INTEGER NOT NULL,
 	dedupe_key TEXT NOT NULL DEFAULT '',
 	match_key TEXT NOT NULL DEFAULT '',
+	content_key TEXT NOT NULL DEFAULT '',
+	lossless INTEGER NOT NULL DEFAULT 0,
+	bitrate_bps INTEGER NOT NULL DEFAULT 0,
 	available INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS tracks_available_idx ON tracks(available);
@@ -299,24 +321,29 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, librarySchemaVersion); 
 	return nil
 }
 
-func (l *Library) loadKnownTracks(ctx context.Context, roots []string) (map[string]int64, error) {
-	rows, err := l.db.QueryContext(ctx, `SELECT path, mod_time FROM tracks WHERE available = 1`)
+type knownTrack struct {
+	modTime    int64
+	contentKey string
+}
+
+func (l *Library) loadKnownTracks(ctx context.Context, roots []string) (map[string]knownTrack, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT path, mod_time, content_key FROM tracks WHERE available = 1`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	known := make(map[string]int64)
+	known := make(map[string]knownTrack)
 	for rows.Next() {
 		var path string
-		var modTime int64
-		if err := rows.Scan(&path, &modTime); err != nil {
+		var knownFile knownTrack
+		if err := rows.Scan(&path, &knownFile.modTime, &knownFile.contentKey); err != nil {
 			return nil, err
 		}
 		if len(roots) > 0 && !pathInRoots(path, roots) {
 			continue
 		}
-		known[path] = modTime
+		known[path] = knownFile
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -342,18 +369,21 @@ func pathInRoot(path string, root string) bool {
 }
 
 const upsertTrackSQL = `
-INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, content_key, lossless, bitrate_bps, available)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT(path) DO UPDATE SET
 	title = excluded.title,
 	artist = excluded.artist,
 	album = excluded.album,
 	track_no = excluded.track_no,
-	duration_ms = excluded.duration_ms,
+	duration_ms = CASE WHEN tracks.mod_time = excluded.mod_time THEN tracks.duration_ms ELSE excluded.duration_ms END,
 	size = excluded.size,
 	mod_time = excluded.mod_time,
 	dedupe_key = excluded.dedupe_key,
 	match_key = excluded.match_key,
+	content_key = excluded.content_key,
+	lossless = excluded.lossless,
+	bitrate_bps = excluded.bitrate_bps,
 	available = 1
 `
 
@@ -384,7 +414,7 @@ func (l *Library) flushTracks(ctx context.Context, tracks []Track) error {
 			t.Title = fallbackTitle(t.path)
 		}
 		setTrackKeys(&t)
-		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix(), t.DedupeKey, t.MatchKey); err != nil {
+		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix(), t.DedupeKey, t.MatchKey, t.ContentKey, t.Lossless, t.Bitrate); err != nil {
 			return err
 		}
 	}
@@ -442,7 +472,7 @@ func (l *Library) writeScannedTracks(ctx context.Context, tracks <-chan Track, i
 	}
 }
 
-func (l *Library) deleteMissing(ctx context.Context, paths map[string]int64) error {
+func (l *Library) deleteMissing(ctx context.Context, paths map[string]knownTrack) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -506,13 +536,13 @@ func (l *Library) SearchField(ctx context.Context, q string, field string) ([]Tr
 		return l.recent(ctx, limit)
 	}
 	rows, err := l.db.QueryContext(ctx, `
-SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available
+SELECT `+trackSelectColumns+`
 FROM (
-	SELECT tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album, tracks.track_no, tracks.duration_ms, tracks.size, tracks.mod_time, tracks.dedupe_key, tracks.match_key, tracks.available,
-		row_number() OVER (PARTITION BY tracks.dedupe_key ORDER BY tracks.path ASC) AS rn
-	FROM tracks
-	JOIN tracks_fts ON tracks_fts.rowid = tracks.id
-	WHERE tracks.available = 1 AND tracks_fts MATCH ?
+	SELECT `+qualifiedTrackSelectColumns+`,
+		row_number() OVER (PARTITION BY t.content_key ORDER BY t.lossless DESC, t.bitrate_bps DESC, t.path ASC) AS rn
+	FROM tracks t
+	JOIN tracks_fts ON tracks_fts.rowid = t.id
+	WHERE t.available = 1 AND tracks_fts MATCH ?
 )
 WHERE rn = 1
 ORDER BY title COLLATE NOCASE ASC, artist COLLATE NOCASE ASC, album COLLATE NOCASE ASC, track_no ASC
@@ -548,12 +578,12 @@ func searchFTSQuery(q string, field string) string {
 func (l *Library) recent(ctx context.Context, limit int) ([]Track, error) {
 	limit = clampTrackQueryLimit(limit)
 	rows, err := l.db.QueryContext(ctx, `
-SELECT id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, available
+SELECT `+trackSelectColumns+`
 FROM (
-	SELECT `+trackSelectColumns+`,
-		row_number() OVER (PARTITION BY dedupe_key ORDER BY path ASC) AS rn
-	FROM tracks
-	WHERE available = 1
+	SELECT `+qualifiedTrackSelectColumns+`,
+		row_number() OVER (PARTITION BY t.content_key ORDER BY t.lossless DESC, t.bitrate_bps DESC, t.path ASC) AS rn
+	FROM tracks t
+	WHERE t.available = 1
 )
 WHERE rn = 1
 ORDER BY mod_time DESC, title
@@ -1185,10 +1215,12 @@ func scanTrack(row rowScanner) (Track, error) {
 	var t Track
 	var unix int64
 	var available int
-	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &t.DedupeKey, &t.MatchKey, &available); err != nil {
+	var lossless int
+	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &t.DedupeKey, &t.MatchKey, &t.ContentKey, &lossless, &t.Bitrate, &available); err != nil {
 		return Track{}, err
 	}
 	t.ModTime = time.Unix(unix, 0)
+	t.Lossless = lossless == 1
 	t.Available = available == 1
 	normalizeTrackDisplay(&t)
 	setTrackKeys(&t)
@@ -1430,9 +1462,9 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 				return nil
 			}
 			modTime := info.ModTime().Unix()
-			if knownModTime, ok := known[path]; ok {
+			if knownFile, ok := known[path]; ok {
 				delete(known, path)
-				if knownModTime == modTime {
+				if knownFile.modTime == modTime && knownFile.contentKey != "" && !strings.HasPrefix(knownFile.contentKey, "legacy:") {
 					unchanged++
 					logProgress(false)
 					return nil
@@ -1507,9 +1539,6 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 		return Track{}, err
 	}
 	defer f.Close()
-	if f.AudioProperties().Codec == "" {
-		return Track{}, errors.New("unrecognized audio stream")
-	}
 	if value := f.Title(); value != "" {
 		t.Title = value
 	}
@@ -1518,6 +1547,12 @@ func readTrack(path string, info fs.FileInfo) (Track, error) {
 	}
 	t.Album = f.Album()
 	t.TrackNo = f.Track()
+	props := f.AudioProperties()
+	if props.Codec == "" {
+		return Track{}, errors.New("unrecognized audio stream")
+	}
+	t.Lossless = losslessCodec(props.Codec)
+	t.Bitrate = props.Bitrate
 	normalizeTrackDisplay(&t)
 	return t, nil
 }
@@ -1549,6 +1584,23 @@ func setTrackKeys(t *Track) {
 	}
 	t.MatchKey = match
 	t.DedupeKey = fmt.Sprintf("%s|%d|%d", match, t.Size, t.ModTime.Unix())
+	identity := strings.Join([]string{
+		normalizeSearch(t.Artist),
+		normalizeSearch(t.Title),
+		normalizeSearch(t.Album),
+		strconv.Itoa(t.TrackNo),
+	}, "\x1f")
+	digest := sha256.Sum256([]byte(identity))
+	t.ContentKey = fmt.Sprintf("v1:%x", digest)
+}
+
+func losslessCodec(codec string) bool {
+	switch strings.ToLower(codec) {
+	case "flac", "alac", "pcm", "pcm-float", "pcm-ext":
+		return true
+	default:
+		return false
+	}
 }
 
 func fallbackTitle(path string) string {
