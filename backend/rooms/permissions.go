@@ -1,6 +1,14 @@
-package main
+package rooms
 
-import "slices"
+import (
+	"slices"
+
+	appauth "listen-party/backend/internal/auth"
+)
+
+type Role = appauth.Role
+
+const RoleAdmin = appauth.RoleAdmin
 
 func UserHasRoomPermission(user UserInfo, room Room, permission RoomPermission) bool {
 	if overrides, ok := room.UserOverrides[user.ID]; ok {
@@ -32,7 +40,7 @@ func UserIsRoomAdmin(user UserInfo, room Room) bool {
 	return false
 }
 
-func openRoomGrants() map[string][]RoomPermission {
+func OpenRoomGrants() map[string][]RoomPermission {
 	return map[string][]RoomPermission{
 		EveryoneRoomGrant: append([]RoomPermission(nil), roomPermissions...),
 	}
@@ -48,7 +56,7 @@ func RoomPermissionsForUser(user UserInfo, room Room) []RoomPermission {
 	return permissions
 }
 
-func cloneRoomGrants(grants map[string][]RoomPermission) map[string][]RoomPermission {
+func CloneRoomGrants(grants map[string][]RoomPermission) map[string][]RoomPermission {
 	if len(grants) == 0 {
 		return nil
 	}

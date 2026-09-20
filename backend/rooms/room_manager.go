@@ -1,6 +1,13 @@
-package main
+package rooms
 
-import "sync"
+import (
+	"sync"
+
+	appauth "listen-party/backend/internal/auth"
+	"listen-party/backend/playback"
+)
+
+type UserInfo = appauth.UserInfo
 
 type RoomPermission string
 
@@ -25,7 +32,7 @@ type Room struct {
 	AdminGroups   []string                    `json:"admin_groups,omitempty"`
 	Grants        map[string][]RoomPermission `json:"grants,omitempty"`
 	UserOverrides map[string][]RoomPermission `json:"user_overrides,omitempty"`
-	Playback      *Playback                   `json:"-"`
+	Playback      *playback.Playback          `json:"-"`
 }
 
 type RoomManager struct {
@@ -49,20 +56,20 @@ func (m *RoomManager) Update(configs []Room) {
 	next := make(map[string]*Room, len(configs))
 	order := make([]string, 0, len(configs))
 	for _, cfg := range configs {
-		playback := (*Playback)(nil)
+		player := (*playback.Playback)(nil)
 		if old != nil && old[cfg.ID] != nil {
-			playback = old[cfg.ID].Playback
+			player = old[cfg.ID].Playback
 		}
-		if playback == nil {
-			playback = NewPlayback(cfg.ID)
+		if player == nil {
+			player = playback.NewPlayback(cfg.ID)
 		}
 		next[cfg.ID] = &Room{
 			ID:            cfg.ID,
 			Name:          cfg.Name,
 			AdminGroups:   append([]string(nil), cfg.AdminGroups...),
-			Grants:        cloneRoomGrants(cfg.Grants),
-			UserOverrides: cloneRoomGrants(cfg.UserOverrides),
-			Playback:      playback,
+			Grants:        CloneRoomGrants(cfg.Grants),
+			UserOverrides: CloneRoomGrants(cfg.UserOverrides),
+			Playback:      player,
 		}
 		order = append(order, cfg.ID)
 	}
@@ -123,8 +130,8 @@ func (m *RoomManager) List() []Room {
 			ID:            room.ID,
 			Name:          room.Name,
 			AdminGroups:   append([]string(nil), room.AdminGroups...),
-			Grants:        cloneRoomGrants(room.Grants),
-			UserOverrides: cloneRoomGrants(room.UserOverrides),
+			Grants:        CloneRoomGrants(room.Grants),
+			UserOverrides: CloneRoomGrants(room.UserOverrides),
 		})
 	}
 	return rooms
@@ -142,10 +149,10 @@ func (m *RoomManager) InvalidateAutoDJPlaylistCandidate(playlistID int64) {
 	}
 }
 
-func (m *RoomManager) playbacks() []*Playback {
+func (m *RoomManager) playbacks() []*playback.Playback {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	playbacks := make([]*Playback, 0, len(m.rooms))
+	playbacks := make([]*playback.Playback, 0, len(m.rooms))
 	for _, room := range m.rooms {
 		playbacks = append(playbacks, room.Playback)
 	}

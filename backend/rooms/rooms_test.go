@@ -1,4 +1,4 @@
-package main
+package rooms
 
 import (
 	"testing"
@@ -120,7 +120,7 @@ func TestUserIsRoomAdmin(t *testing.T) {
 }
 
 func TestEveryoneRoomGrantAppliesOnlyToAuthenticatedUsers(t *testing.T) {
-	room := Room{ID: "main", Name: "Public Room", Grants: openRoomGrants()}
+	room := Room{ID: "main", Name: "Public Room", Grants: OpenRoomGrants()}
 	if UserHasRoomPermission(UserInfo{}, room, PermissionQueueAdd) {
 		t.Fatal("anonymous identity received everyone permission")
 	}
