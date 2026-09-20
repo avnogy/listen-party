@@ -7,6 +7,7 @@ import (
 	"listen-party/backend/app/configuration"
 	"listen-party/backend/app/events"
 	"listen-party/backend/app/media"
+	"listen-party/backend/app/playlists"
 	"listen-party/backend/app/session"
 	appauth "listen-party/backend/internal/auth"
 )
@@ -32,13 +33,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rooms/{room}/api/admin/disconnect", requireUser(http.HandlerFunc(s.handleRoomAdminDisconnect)))
 	mux.Handle("GET /api/search", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleSearch(w, r, s) })))
 	mux.Handle("GET /api/library", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleLibrary(w, r, s) })))
-	mux.Handle("GET /api/playlists", requireUser(http.HandlerFunc(s.handlePlaylists)))
-	mux.Handle("POST /api/playlists", requireUser(http.HandlerFunc(s.handlePlaylistCreate)))
-	mux.Handle("GET /api/playlists/{id}", requireUser(http.HandlerFunc(s.handlePlaylist)))
-	mux.Handle("DELETE /api/playlists/{id}", requireUser(http.HandlerFunc(s.handlePlaylistDelete)))
-	mux.Handle("POST /api/playlists/{id}/items", requireUser(http.HandlerFunc(s.handlePlaylistAddItem)))
-	mux.Handle("POST /api/playlists/{id}/import-folder", requireUser(http.HandlerFunc(s.handlePlaylistImportFolder)))
-	mux.Handle("DELETE /api/playlists/{id}/items/{item}", requireUser(http.HandlerFunc(s.handlePlaylistRemoveItem)))
+	mux.Handle("GET /api/playlists", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylists(w, r, s) })))
+	mux.Handle("POST /api/playlists", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylistCreate(w, r, s) })))
+	mux.Handle("GET /api/playlists/{id}", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylist(w, r, s) })))
+	mux.Handle("DELETE /api/playlists/{id}", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylistDelete(w, r, s) })))
+	mux.Handle("POST /api/playlists/{id}/items", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylistAddItem(w, r, s) })))
+	mux.Handle("POST /api/playlists/{id}/import-folder", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylistImportFolder(w, r, s) })))
+	mux.Handle("DELETE /api/playlists/{id}/items/{item}", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylistRemoveItem(w, r, s) })))
 	mux.Handle("POST /rooms/{room}/api/command", requireUser(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/admin/rescan", requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleRescan(w, r, s) })))
 	mux.Handle("POST /api/admin/rescan-dir", requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleRescanDir(w, r, s) })))

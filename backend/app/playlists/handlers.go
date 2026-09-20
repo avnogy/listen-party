@@ -1,39 +1,49 @@
-package server
+package playlists
 
 import (
 	"net/http"
 
 	"listen-party/backend/app/media"
+	"listen-party/backend/auth"
 	httpapi "listen-party/backend/http"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/rooms"
 )
+
+const maxFolderImportFiles = 50_000
+
+type Host interface {
+	AuthStore() auth.Gate
+	LibraryStore() *musiclib.Library
+	RoomStore() *rooms.RoomManager
+}
 
 type playlistView struct {
 	musiclib.Playlist
 	CanEdit bool `json:"can_edit"`
 }
 
-func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylists(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	playlists, err := s.Library.ListPlaylists(r.Context())
+	playlists, err := host.LibraryStore().ListPlaylists(r.Context())
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
 	out := make([]playlistView, 0, len(playlists))
 	for _, playlist := range playlists {
-		out = append(out, s.playlistView(user, playlist))
+		out = append(out, playlistViewForUser(user, playlist))
 	}
 	httpapi.WriteJSON(w, out)
 }
 
-func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylist(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -42,16 +52,16 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	playlist, err := host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	httpapi.WriteJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, playlistViewForUser(user, playlist))
 }
 
-func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylistCreate(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -62,16 +72,16 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
-	playlist, err := s.Library.CreatePlaylist(r.Context(), req.Name, user.ID)
+	playlist, err := host.LibraryStore().CreatePlaylist(r.Context(), req.Name, user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	httpapi.WriteJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, playlistViewForUser(user, playlist))
 }
 
-func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylistAddItem(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -80,7 +90,7 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	playlist, err := host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
@@ -99,20 +109,20 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "dedupe_key is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := s.Library.AddPlaylistTrack(r.Context(), id, req.DedupeKey); err != nil {
+	if _, err := host.LibraryStore().AddPlaylistTrack(r.Context(), id, req.DedupeKey); err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	playlist, err = s.Library.GetPlaylist(r.Context(), id)
+	playlist, err = host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	httpapi.WriteJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, playlistViewForUser(user, playlist))
 }
 
-func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -125,7 +135,7 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	playlist, err := host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
@@ -134,21 +144,21 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 		http.Error(w, "playlist edit denied", http.StatusForbidden)
 		return
 	}
-	if err := s.Library.RemovePlaylistItem(r.Context(), id, itemID); err != nil {
+	if err := host.LibraryStore().RemovePlaylistItem(r.Context(), id, itemID); err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	s.Rooms.InvalidateAutoDJPlaylistCandidate(id)
-	playlist, err = s.Library.GetPlaylist(r.Context(), id)
+	host.RoomStore().InvalidateAutoDJPlaylistCandidate(id)
+	playlist, err = host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	httpapi.WriteJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, playlistViewForUser(user, playlist))
 }
 
-func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylistImportFolder(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -157,7 +167,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	playlist, err := host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
@@ -177,7 +187,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "folder contains too many files", http.StatusRequestEntityTooLarge)
 		return
 	}
-	result, err := s.Library.ImportPlaylistFolder(r.Context(), id, req.Files)
+	result, err := host.LibraryStore().ImportPlaylistFolder(r.Context(), id, req.Files)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -185,8 +195,8 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 	httpapi.WriteJSON(w, result)
 }
 
-func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.Auth.CurrentUser(r)
+func HandlePlaylistDelete(w http.ResponseWriter, r *http.Request, host Host) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -195,7 +205,7 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	playlist, err := s.Library.GetPlaylist(r.Context(), id)
+	playlist, err := host.LibraryStore().GetPlaylist(r.Context(), id)
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
@@ -204,15 +214,15 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "playlist edit denied", http.StatusForbidden)
 		return
 	}
-	if err := s.Library.DeletePlaylist(r.Context(), id); err != nil {
+	if err := host.LibraryStore().DeletePlaylist(r.Context(), id); err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}
-	s.Rooms.ResetAutoDJPlaylistSource(id)
+	host.RoomStore().ResetAutoDJPlaylistSource(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) playlistView(user appauth.UserInfo, playlist musiclib.Playlist) playlistView {
+func playlistViewForUser(user appauth.UserInfo, playlist musiclib.Playlist) playlistView {
 	return playlistView{
 		Playlist: playlist,
 		CanEdit:  userCanEditPlaylist(user, playlist),
