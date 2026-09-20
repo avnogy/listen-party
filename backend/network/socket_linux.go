@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package network
 
 import (
 	"syscall"
@@ -8,7 +8,7 @@ import (
 
 const soReusePort = 0x0f
 
-func setReusePort(network, address string, conn syscall.RawConn) error {
+func SetReusePort(network, address string, conn syscall.RawConn) error {
 	var sockErr error
 	err := conn.Control(func(fd uintptr) {
 		if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {

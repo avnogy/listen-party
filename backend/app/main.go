@@ -16,6 +16,7 @@ import (
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	appLogging "listen-party/backend/logging"
+	"listen-party/backend/network"
 	"listen-party/backend/rooms"
 )
 
@@ -149,6 +150,6 @@ func main() {
 }
 
 func listenWithReuse(ctx context.Context, addr string) (net.Listener, error) {
-	config := net.ListenConfig{Control: setReusePort}
+	config := net.ListenConfig{Control: network.SetReusePort}
 	return config.Listen(ctx, "tcp", addr)
 }
