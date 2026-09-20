@@ -124,7 +124,7 @@ func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*Room,
 	return room, user, true
 }
 
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+/*func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	room, user, ok := s.roomFromRequest(w, r)
 	if !ok {
 		return
@@ -212,6 +212,7 @@ func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state Playba
 	}
 	return true
 }
+*/
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	room, user, ok := s.roomFromRequest(w, r)
