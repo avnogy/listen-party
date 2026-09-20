@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 )
 
@@ -21,7 +22,7 @@ func NewDefaultConfigForRoot(configDir string) Config {
 		Revision:     1,
 		Addr:         "0.0.0.0:8080",
 		MusicDirs:    []string{filepath.Join(configDir, "music")},
-		DatabasePath: databasePath(configDir),
+		DatabasePath: configpaths.DatabasePath(configDir),
 		ScanWorkers:  defaultScanWorkers,
 		BannedIPs:    []string{},
 		Rooms:        []Room{{ID: defaultRoomID, Name: "Public Room", Grants: openRoomGrants()}},
@@ -54,7 +55,7 @@ func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 	if c.Revision <= 0 {
 		c.Revision = 1
 	}
-	c.DatabasePath = databasePath(configRoot)
+	c.DatabasePath = configpaths.DatabasePath(configRoot)
 	if c.ScanWorkers == 0 {
 		c.ScanWorkers = defaultScanWorkers
 	}
@@ -80,8 +81,4 @@ func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 	c.Auth.PocketBase.DataDir = appauth.DataDir(configRoot)
 	c.Auth.PocketBase.BootstrapAdminEmail = appauth.DefaultBootstrapAdminEmail()
 	return nil
-}
-
-func databasePath(configRoot string) string {
-	return filepath.Join(configRoot, "listen-party.sqlite")
 }

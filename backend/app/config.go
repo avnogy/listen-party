@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 )
 
@@ -37,26 +38,15 @@ const (
 var roomIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 func DefaultConfigDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "listen-party"), nil
+	return configpaths.DefaultDir()
 }
 
 func DefaultConfigPath() (string, error) {
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "config.json"), nil
+	return configpaths.DefaultPath()
 }
 
 func ResolveConfigPath(path string) (string, error) {
-	if path != "" {
-		return path, nil
-	}
-	return DefaultConfigPath()
+	return configpaths.ResolvePath(path)
 }
 
 func DefaultDatabasePath() (string, error) {
@@ -64,15 +54,11 @@ func DefaultDatabasePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return databasePath(dir), nil
+	return configpaths.DatabasePath(dir), nil
 }
 
 func DefaultMusicDir() (string, error) {
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "music"), nil
+	return configpaths.MusicDir()
 }
 
 func LoadConfig(path string) (Config, error) {
