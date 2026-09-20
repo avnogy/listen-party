@@ -1,0 +1,166 @@
+package rooms
+
+import (
+	"sync"
+
+	appauth "listen-party/backend/auth"
+	"listen-party/backend/playback"
+)
+
+type RoomPermission string
+
+const (
+	PermissionQueueAdd        RoomPermission = "queue_add"
+	PermissionQueueManage     RoomPermission = "queue_manage"
+	PermissionPlaybackControl RoomPermission = "playback_control"
+	PermissionVolumeControl   RoomPermission = "volume_control"
+	EveryoneRoomGrant                        = "everyone"
+)
+
+var roomPermissions = []RoomPermission{
+	PermissionQueueAdd,
+	PermissionQueueManage,
+	PermissionPlaybackControl,
+	PermissionVolumeControl,
+}
+
+var SupportedPermissions = append([]RoomPermission(nil), roomPermissions...)
+
+type Room struct {
+	ID            string                      `json:"id"`
+	Name          string                      `json:"name"`
+	AdminGroups   []string                    `json:"admin_groups,omitempty"`
+	Grants        map[string][]RoomPermission `json:"grants,omitempty"`
+	UserOverrides map[string][]RoomPermission `json:"user_overrides,omitempty"`
+	Playback      *playback.Playback          `json:"-"`
+}
+
+type RoomManager struct {
+	mu        sync.RWMutex
+	rooms     map[string]*Room
+	order     []string
+	defaultID string
+}
+
+func NewRoomManager(configs []Room) *RoomManager {
+	m := &RoomManager{}
+	m.Update(configs)
+	return m
+}
+
+func (m *RoomManager) Update(configs []Room) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	old := m.rooms
+	next := make(map[string]*Room, len(configs))
+	order := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		player := (*playback.Playback)(nil)
+		if old != nil && old[cfg.ID] != nil {
+			player = old[cfg.ID].Playback
+		}
+		if player == nil {
+			player = playback.NewPlayback(cfg.ID)
+		}
+		next[cfg.ID] = &Room{
+			ID:            cfg.ID,
+			Name:          cfg.Name,
+			AdminGroups:   append([]string(nil), cfg.AdminGroups...),
+			Grants:        CloneRoomGrants(cfg.Grants),
+			UserOverrides: CloneRoomGrants(cfg.UserOverrides),
+			Playback:      player,
+		}
+		order = append(order, cfg.ID)
+	}
+	for id, room := range old {
+		if _, ok := next[id]; !ok {
+			room.Playback.CloseSubscribers()
+		}
+	}
+	m.rooms = next
+	m.order = order
+	if len(order) > 0 {
+		m.defaultID = order[0]
+	} else {
+		m.defaultID = ""
+	}
+	for _, room := range next {
+		room.Playback.Notify()
+	}
+}
+
+func (m *RoomManager) DefaultID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.defaultID
+}
+
+func (m *RoomManager) Get(id string) (*Room, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room, ok := m.rooms[id]
+	return room, ok
+}
+
+func (m *RoomManager) UserHasPermission(id string, user appauth.UserInfo, permission RoomPermission) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room, ok := m.rooms[id]
+	return ok && UserHasRoomPermission(user, *room, permission)
+}
+
+func (m *RoomManager) PermissionsForUser(id string, user appauth.UserInfo) ([]RoomPermission, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	room, ok := m.rooms[id]
+	if !ok {
+		return nil, false
+	}
+	return RoomPermissionsForUser(user, *room), true
+}
+
+func (m *RoomManager) List() []Room {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rooms := make([]Room, 0, len(m.order))
+	for _, id := range m.order {
+		room := m.rooms[id]
+		rooms = append(rooms, Room{
+			ID:            room.ID,
+			Name:          room.Name,
+			AdminGroups:   append([]string(nil), room.AdminGroups...),
+			Grants:        CloneRoomGrants(room.Grants),
+			UserOverrides: CloneRoomGrants(room.UserOverrides),
+		})
+	}
+	return rooms
+}
+
+func (m *RoomManager) ResetAutoDJPlaylistSource(playlistID int64) {
+	for _, playback := range m.playbacks() {
+		playback.ResetAutoDJPlaylistSource(playlistID)
+	}
+}
+
+func (m *RoomManager) InvalidateAutoDJPlaylistCandidate(playlistID int64) {
+	for _, playback := range m.playbacks() {
+		playback.InvalidateAutoDJPlaylistCandidate(playlistID)
+	}
+}
+
+func (m *RoomManager) playbacks() []*playback.Playback {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	playbacks := make([]*playback.Playback, 0, len(m.rooms))
+	for _, room := range m.rooms {
+		playbacks = append(playbacks, room.Playback)
+	}
+	return playbacks
+}
+
+func (m *RoomManager) Close() {
+	for _, playback := range m.playbacks() {
+		playback.CloseSubscribers()
+	}
+}

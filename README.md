@@ -28,7 +28,7 @@ authentication are stored beside the configuration file.
 Go 1.25 or newer is required to build from source.
 
 ```sh
-go run .
+go run ./backend/app
 ```
 
 Open `http://localhost:8080`. On first run, the server creates its config,
@@ -383,7 +383,7 @@ Restart the server after changing authentication settings.
 Build for the current platform:
 
 ```sh
-go build -trimpath -ldflags="-s -w" -o build/lp .
+go build -trimpath -ldflags="-s -w" -o build/lp ./backend/app
 ```
 
 Build Linux and Windows AMD64 binaries:
@@ -423,7 +423,7 @@ library database; handle them as sensitive backups.
 ```sh
 go test ./...
 go test -race ./...
-go build -trimpath -ldflags="-s -w" -o build/lp .
+go build -trimpath -ldflags="-s -w" -o build/lp ./backend/app
 ```
 
 Build and run the local image with Docker Compose:

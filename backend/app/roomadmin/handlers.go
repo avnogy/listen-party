@@ -1,0 +1,138 @@
+package roomadmin
+
+import (
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"listen-party/backend/auth"
+	appauth "listen-party/backend/auth"
+	"listen-party/backend/config"
+	httpapi "listen-party/backend/http"
+	"listen-party/backend/rooms"
+)
+
+type Host interface {
+	AuthStore() auth.Gate
+	RoomStore() *rooms.RoomManager
+	RoomFromRequest(http.ResponseWriter, *http.Request) (*rooms.Room, appauth.UserInfo, bool)
+	ConfigSnapshot() (config.Config, string)
+	LockConfigUpdate() func()
+	SetConfig(config.Config)
+}
+
+func Handle(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
+	if !ok {
+		return
+	}
+	if !rooms.UserIsRoomAdmin(user, *room) {
+		http.Error(w, "room administration denied", http.StatusForbidden)
+		return
+	}
+	users, err := host.AuthStore().ListEnabledUsers()
+	if err != nil {
+		httpapi.WriteError(w, err)
+		return
+	}
+	httpapi.WriteJSON(w, map[string]any{
+		"id":             room.ID,
+		"name":           room.Name,
+		"grants":         rooms.CloneRoomGrants(room.Grants),
+		"user_overrides": rooms.CloneRoomGrants(room.UserOverrides),
+		"users":          users,
+	})
+}
+
+func HandleUpdate(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
+	if !ok {
+		return
+	}
+	if !rooms.UserIsRoomAdmin(user, *room) {
+		http.Error(w, "room administration denied", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Grants        map[string][]rooms.RoomPermission `json:"grants"`
+		UserOverrides map[string][]rooms.RoomPermission `json:"user_overrides"`
+	}
+	if !httpapi.ReadJSON(w, r, &req) {
+		return
+	}
+	unlockUpdate := host.LockConfigUpdate()
+	defer unlockUpdate()
+	cfg, configPath := host.ConfigSnapshot()
+	cfg = cloneConfig(cfg)
+	found := false
+	for i := range cfg.Rooms {
+		if cfg.Rooms[i].ID == room.ID {
+			if !rooms.UserIsRoomAdmin(user, cfg.Rooms[i]) {
+				http.Error(w, "room administration denied", http.StatusForbidden)
+				return
+			}
+			cfg.Rooms[i].Grants = config.NormalizeRoomGrants(req.Grants)
+			cfg.Rooms[i].UserOverrides = req.UserOverrides
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+	cfg.Revision++
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	host.RoomStore().Update(cfg.Rooms)
+	host.SetConfig(cfg)
+	updated, _ := host.RoomStore().Get(room.ID)
+	httpapi.WriteJSON(w, map[string]any{
+		"id":             updated.ID,
+		"name":           updated.Name,
+		"grants":         rooms.CloneRoomGrants(updated.Grants),
+		"user_overrides": rooms.CloneRoomGrants(updated.UserOverrides),
+	})
+}
+
+func HandleDisconnect(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
+	if !ok {
+		return
+	}
+	if !rooms.UserIsRoomAdmin(user, *room) {
+		http.Error(w, "room administration denied", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+	}
+	if !httpapi.ReadJSON(w, r, &req) {
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" {
+		http.Error(w, "username is required", http.StatusBadRequest)
+		return
+	}
+	if !room.Playback.DisconnectListener(req.Username) {
+		http.Error(w, "listener not found", http.StatusNotFound)
+		return
+	}
+	slog.Info("listener disconnected by room administrator", "room", room.ID, "username", req.Username, "administrator", user.Username)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func cloneConfig(cfg config.Config) config.Config {
+	cfg.MusicDirs = append([]string(nil), cfg.MusicDirs...)
+	cfg.BannedIPs = append([]string(nil), cfg.BannedIPs...)
+	cfg.Rooms = append([]rooms.Room(nil), cfg.Rooms...)
+	for i := range cfg.Rooms {
+		cfg.Rooms[i].AdminGroups = append([]string(nil), cfg.Rooms[i].AdminGroups...)
+		cfg.Rooms[i].Grants = rooms.CloneRoomGrants(cfg.Rooms[i].Grants)
+		cfg.Rooms[i].UserOverrides = rooms.CloneRoomGrants(cfg.Rooms[i].UserOverrides)
+	}
+	return cfg
+}
