@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+import httpapi "listen-party/backend/http"
 import musiclib "listen-party/backend/internal/library"
 import "listen-party/backend/playback"
 import "listen-party/backend/rooms"
@@ -20,7 +21,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req commandRequest
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	permission, known := permissionForAction(req.Action)
@@ -58,7 +59,7 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		config, _ := room.Playback.AutoDJConfiguration()
 		candidate, entries, err := s.newAutoDJCycle(r.Context(), config.Source)
 		if err != nil {
-			writeError(w, err)
+			httpapi.WriteError(w, err)
 			return
 		}
 		state, configured := room.Playback.ConfigureAutoDJForSource(config.Source, true, candidate, entries)
@@ -79,14 +80,14 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 			if source.Type == playback.AutoDJSourceLibrary {
 				count, err := s.Library.Count(r.Context())
 				if err != nil {
-					writeError(w, err)
+					httpapi.WriteError(w, err)
 					return
 				}
 				available = count > 0
 			} else {
 				entries, err := s.Library.PlaylistShuffleItemIDs(r.Context(), source.PlaylistID)
 				if err != nil {
-					writeError(w, err)
+					httpapi.WriteError(w, err)
 					return
 				}
 				available = len(entries) > 0
@@ -100,7 +101,7 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		}
 		candidate, entries, err := s.newAutoDJCycle(r.Context(), source)
 		if err != nil {
-			writeError(w, err)
+			httpapi.WriteError(w, err)
 			return
 		}
 		s.writeCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, candidate, entries))
@@ -111,7 +112,7 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		}
 		track, err := s.Library.ResolveDedupeKey(r.Context(), req.DedupeKey)
 		if err != nil {
-			writeError(w, err)
+			httpapi.WriteError(w, err)
 			return
 		}
 		if track.DurationMS <= 0 {
@@ -183,7 +184,7 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		}
 		track, err := s.Library.ResolveDedupeKey(r.Context(), req.DedupeKey)
 		if err != nil {
-			writeError(w, err)
+			httpapi.WriteError(w, err)
 			return
 		}
 		if track.DurationMS <= 0 {
@@ -210,7 +211,7 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 	case "skip":
 		before := room.Playback.Snapshot()
 		if err := s.prepareAutoDJ(r.Context(), room); err != nil {
-			writeError(w, err)
+			httpapi.WriteError(w, err)
 			return
 		}
 		state := room.Playback.Skip()

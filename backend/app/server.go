@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	httpapi "listen-party/backend/http"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
 	"log/slog"
@@ -20,7 +21,7 @@ func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event
 	view, err := s.viewStateForRequest(r, state)
 	if err != nil {
 		slog.Warn("build view state", "remote", r.RemoteAddr, "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	slog.Info("playback action",
@@ -29,5 +30,5 @@ func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event
 		"remote", r.RemoteAddr,
 		"room", room.ID,
 	)
-	writeJSON(w, view)
+	httpapi.WriteJSON(w, view)
 }

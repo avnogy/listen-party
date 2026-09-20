@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"listen-party/backend/config"
+	httpapi "listen-party/backend/http"
 	"listen-party/backend/rooms"
 )
 
@@ -20,10 +21,10 @@ func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := s.Auth.ListEnabledUsers()
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{
+	httpapi.WriteJSON(w, map[string]any{
 		"id":             room.ID,
 		"name":           room.Name,
 		"grants":         rooms.CloneRoomGrants(room.Grants),
@@ -45,7 +46,7 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		Grants        map[string][]rooms.RoomPermission `json:"grants"`
 		UserOverrides map[string][]rooms.RoomPermission `json:"user_overrides"`
 	}
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	s.configUpdateMu.Lock()
@@ -82,7 +83,7 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	s.Config = cfg
 	s.configMu.Unlock()
 	updated, _ := s.Rooms.Get(room.ID)
-	writeJSON(w, map[string]any{
+	httpapi.WriteJSON(w, map[string]any{
 		"id":             updated.ID,
 		"name":           updated.Name,
 		"grants":         rooms.CloneRoomGrants(updated.Grants),
@@ -102,7 +103,7 @@ func (s *Server) handleRoomAdminDisconnect(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		Username string `json:"username"`
 	}
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)

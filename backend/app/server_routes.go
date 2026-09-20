@@ -1,6 +1,10 @@
 package main
 
-import "net/http"
+import (
+	"net/http"
+
+	assets "listen-party"
+)
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -8,8 +12,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /admin", requireAdmin(http.HandlerFunc(s.handleAdminPage)))
 	mux.Handle("GET /admin.js", requireAdmin(http.HandlerFunc(s.handleAdminJS)))
 	requireUser := s.Auth.Require()
-	webFiles := http.FileServer(http.FS(webRoot()))
-	adminFiles := requireAdmin(http.FileServer(http.FS(adminRoot())))
+	webFiles := http.FileServer(http.FS(assets.WebRoot()))
+	adminFiles := requireAdmin(http.FileServer(http.FS(assets.AdminRoot())))
 	mux.Handle("GET /admin/", adminFiles)
 	mux.Handle("GET /{$}", requireUser(http.HandlerFunc(s.handleApp)))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(s.handleFavicon))

@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-import musiclib "listen-party/backend/internal/library"
+import (
+	httpapi "listen-party/backend/http"
+	musiclib "listen-party/backend/internal/library"
+)
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	room, user, ok := s.roomFromRequest(w, r)
@@ -23,29 +26,29 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := s.viewStateForRequest(r, room.Playback.Snapshot())
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, state)
+	httpapi.WriteJSON(w, state)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	tracks, err := s.Library.SearchField(r.Context(), q, r.URL.Query().Get("field"))
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, tracks)
+	httpapi.WriteJSON(w, tracks)
 }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	count, err := s.Library.Count(r.Context())
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{
+	httpapi.WriteJSON(w, map[string]any{
 		"track_count": count,
 		"scan":        s.Library.ScanStatus(),
 	})
@@ -72,7 +75,7 @@ func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("library rescan failed", "remote", r.RemoteAddr, "duration", time.Since(started), "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	count, err := s.Library.Count(r.Context())
@@ -88,7 +91,7 @@ func (s *Server) handleRescanDir(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MusicDir string `json:"music_dir"`
 	}
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	dir := strings.TrimSpace(req.MusicDir)
@@ -115,7 +118,7 @@ func (s *Server) handleRescanDir(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("library directory rescan failed", "remote", r.RemoteAddr, "music_dir", dir, "duration", time.Since(started), "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	count, err := s.Library.Count(r.Context())
@@ -141,7 +144,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("load media track", "remote", r.RemoteAddr, "track_id", id, "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	defer media.Close()
@@ -163,7 +166,7 @@ func (s *Server) handleArtwork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("load media artwork", "remote", r.RemoteAddr, "track_id", id, "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", mimeType)

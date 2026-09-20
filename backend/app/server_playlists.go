@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 
+	httpapi "listen-party/backend/http"
 	musiclib "listen-party/backend/internal/library"
 )
 
@@ -19,14 +20,14 @@ func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
 	}
 	playlists, err := s.Library.ListPlaylists(r.Context())
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	out := make([]playlistView, 0, len(playlists))
 	for _, playlist := range playlists {
 		out = append(out, s.playlistView(user, playlist))
 	}
-	writeJSON(w, out)
+	httpapi.WriteJSON(w, out)
 }
 
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
@@ -41,10 +42,10 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	playlist, err := s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, s.playlistView(user, playlist))
 }
 
 func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +57,7 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	playlist, err := s.Library.CreatePlaylist(r.Context(), req.Name, user.ID)
@@ -64,7 +65,7 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, s.playlistView(user, playlist))
 }
 
 func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +80,7 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 	}
 	playlist, err := s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	if !userCanEditPlaylist(user, playlist) {
@@ -89,7 +90,7 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DedupeKey string `json:"dedupe_key"`
 	}
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	if req.DedupeKey == "" {
@@ -97,15 +98,15 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.Library.AddPlaylistTrack(r.Context(), id, req.DedupeKey); err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	playlist, err = s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, s.playlistView(user, playlist))
 }
 
 func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +125,7 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 	}
 	playlist, err := s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	if !userCanEditPlaylist(user, playlist) {
@@ -132,16 +133,16 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Library.RemovePlaylistItem(r.Context(), id, itemID); err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	s.Rooms.InvalidateAutoDJPlaylistCandidate(id)
 	playlist, err = s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
-	writeJSON(w, s.playlistView(user, playlist))
+	httpapi.WriteJSON(w, s.playlistView(user, playlist))
 }
 
 func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +157,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 	}
 	playlist, err := s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	if !userCanEditPlaylist(user, playlist) {
@@ -167,7 +168,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 		Files []musiclib.FolderManifestFile `json:"files"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
-	if !readJSON(w, r, &req) {
+	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
 	if len(req.Files) > maxFolderImportFiles {
@@ -179,7 +180,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, result)
+	httpapi.WriteJSON(w, result)
 }
 
 func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +195,7 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	playlist, err := s.Library.GetPlaylist(r.Context(), id)
 	if err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	if !userCanEditPlaylist(user, playlist) {
@@ -202,7 +203,7 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Library.DeletePlaylist(r.Context(), id); err != nil {
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 	s.Rooms.ResetAutoDJPlaylistSource(id)

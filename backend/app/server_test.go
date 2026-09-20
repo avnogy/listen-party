@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	assets "listen-party"
 	. "listen-party/backend/config"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
@@ -113,7 +114,7 @@ func TestAdminPageRequiresAdminCredentials(t *testing.T) {
 func TestEnabledUserStaticAssetsAreServed(t *testing.T) {
 	server := testServer(&Server{Auth: fakeAuth{user: UserInfo{Username: "alice"}}}).Handler()
 	paths := []string{"/"}
-	_ = fs.WalkDir(webRoot(), ".", func(path string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(assets.WebRoot(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || path == "index.html" {
 			return nil
 		}

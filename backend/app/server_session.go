@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	assets "listen-party"
+	httpapi "listen-party/backend/http"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/rooms"
 )
@@ -13,7 +15,7 @@ func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.ServeFileFS(w, r, webRoot(), "index.html")
+	http.ServeFileFS(w, r, assets.WebRoot(), "index.html")
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +41,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			disconnected[room.ID] = activeRoom.Playback.ListenerDisconnected(user)
 		}
 	}
-	writeJSON(w, map[string]any{
+	httpapi.WriteJSON(w, map[string]any{
 		"audio_extensions": musiclib.AudioExtensions(), "default_room_id": s.Rooms.DefaultID(),
 		"rooms": summaries, "permissions": permissions, "room_administration": administration,
 		"disconnected": disconnected, "user": user,
@@ -47,11 +49,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, adminRoot(), "admin.html")
+	http.ServeFileFS(w, r, assets.AdminRoot(), "admin.html")
 }
 func (s *Server) handleAdminJS(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, adminRoot(), "admin.js")
+	http.ServeFileFS(w, r, assets.AdminRoot(), "admin.js")
 }
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, webRoot(), "favicon.ico")
+	http.ServeFileFS(w, r, assets.WebRoot(), "favicon.ico")
 }

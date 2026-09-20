@@ -6,18 +6,19 @@ import (
 	"path/filepath"
 
 	"listen-party/backend/config"
+	httpapi "listen-party/backend/http"
 )
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	s.configMu.RLock()
 	cfg := s.Config
 	s.configMu.RUnlock()
-	writeJSON(w, cfg)
+	httpapi.WriteJSON(w, cfg)
 }
 
 func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	var cfg config.Config
-	if !readJSON(w, r, &cfg) {
+	if !httpapi.ReadJSON(w, r, &cfg) {
 		return
 	}
 	s.configUpdateMu.Lock()
@@ -34,7 +35,7 @@ func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if err := cfg.ApplyDefaultsForRoot(filepath.Dir(path)); err != nil {
 		slog.Warn("reject config update", "remote", r.RemoteAddr, "error", err)
-		writeError(w, err)
+		httpapi.WriteError(w, err)
 		return
 	}
 
@@ -64,5 +65,5 @@ func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 		"music_dirs", len(cfg.MusicDirs),
 		"scan_workers", cfg.ScanWorkers,
 	)
-	writeJSON(w, cfg)
+	httpapi.WriteJSON(w, cfg)
 }
