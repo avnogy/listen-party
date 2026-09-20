@@ -9,13 +9,14 @@ import (
 	"sync"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/rooms"
 )
 
 type Server struct {
 	Auth           AuthGate
 	AuthRoutes     http.Handler
 	Library        *musiclib.Library
-	Rooms          *RoomManager
+	Rooms          *rooms.RoomManager
 	Config         Config
 	ConfigPath     string
 	configMu       sync.RWMutex
@@ -95,7 +96,7 @@ func isAuthRoute(path string) bool {
 	return false
 }
 
-func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*Room, UserInfo, bool) {
+func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms.Room, UserInfo, bool) {
 	roomID := r.PathValue("room")
 	if roomID == "" {
 		roomID = s.Rooms.DefaultID()

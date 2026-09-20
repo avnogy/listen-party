@@ -6,11 +6,7 @@ import (
 	appauth "listen-party/backend/internal/auth"
 )
 
-type Role = appauth.Role
-
-const RoleAdmin = appauth.RoleAdmin
-
-func UserHasRoomPermission(user UserInfo, room Room, permission RoomPermission) bool {
+func UserHasRoomPermission(user appauth.UserInfo, room Room, permission RoomPermission) bool {
 	if overrides, ok := room.UserOverrides[user.ID]; ok {
 		return slices.Contains(overrides, permission)
 	}
@@ -28,8 +24,8 @@ func UserHasRoomPermission(user UserInfo, room Room, permission RoomPermission) 
 	return false
 }
 
-func UserIsRoomAdmin(user UserInfo, room Room) bool {
-	if user.Role == RoleAdmin {
+func UserIsRoomAdmin(user appauth.UserInfo, room Room) bool {
+	if user.Role == appauth.RoleAdmin {
 		return true
 	}
 	for _, group := range user.Groups {
@@ -46,7 +42,7 @@ func OpenRoomGrants() map[string][]RoomPermission {
 	}
 }
 
-func RoomPermissionsForUser(user UserInfo, room Room) []RoomPermission {
+func RoomPermissionsForUser(user appauth.UserInfo, room Room) []RoomPermission {
 	permissions := make([]RoomPermission, 0, len(roomPermissions))
 	for _, permission := range roomPermissions {
 		if UserHasRoomPermission(user, room, permission) {

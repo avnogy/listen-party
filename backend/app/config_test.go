@@ -7,7 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	. "listen-party/backend/rooms"
 )
+
+var roomPermissions = SupportedPermissions
 
 func TestValidateRequiresUsefulConfig(t *testing.T) {
 	cfg := Config{

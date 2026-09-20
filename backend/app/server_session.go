@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/rooms"
 )
 
 func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
@@ -21,19 +22,19 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	rooms := s.Rooms.List()
+	roomList := s.Rooms.List()
 	type roomSummary struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	summaries := make([]roomSummary, 0, len(rooms))
-	permissions := make(map[string][]RoomPermission, len(rooms))
-	administration := make(map[string]bool, len(rooms))
-	disconnected := make(map[string]bool, len(rooms))
-	for _, room := range rooms {
+	summaries := make([]roomSummary, 0, len(roomList))
+	permissions := make(map[string][]rooms.RoomPermission, len(roomList))
+	administration := make(map[string]bool, len(roomList))
+	disconnected := make(map[string]bool, len(roomList))
+	for _, room := range roomList {
 		summaries = append(summaries, roomSummary{ID: room.ID, Name: room.Name})
-		permissions[room.ID] = RoomPermissionsForUser(user, room)
-		administration[room.ID] = UserIsRoomAdmin(user, room)
+		permissions[room.ID] = rooms.RoomPermissionsForUser(user, room)
+		administration[room.ID] = rooms.UserIsRoomAdmin(user, room)
 		if activeRoom, ok := s.Rooms.Get(room.ID); ok {
 			disconnected[room.ID] = activeRoom.Playback.ListenerDisconnected(user)
 		}

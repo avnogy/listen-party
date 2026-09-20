@@ -10,6 +10,7 @@ import (
 
 	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
+	domainrooms "listen-party/backend/rooms"
 )
 
 type AuthConfig struct {
@@ -17,15 +18,15 @@ type AuthConfig struct {
 }
 
 type Config struct {
-	Version      int        `json:"version"`
-	Revision     int64      `json:"revision"`
-	Addr         string     `json:"addr"`
-	MusicDirs    []string   `json:"music_dirs"`
-	DatabasePath string     `json:"-"`
-	ScanWorkers  int        `json:"scan_workers"`
-	BannedIPs    []string   `json:"banned_ips"`
-	Rooms        []Room     `json:"rooms"`
-	Auth         AuthConfig `json:"auth"`
+	Version      int                `json:"version"`
+	Revision     int64              `json:"revision"`
+	Addr         string             `json:"addr"`
+	MusicDirs    []string           `json:"music_dirs"`
+	DatabasePath string             `json:"-"`
+	ScanWorkers  int                `json:"scan_workers"`
+	BannedIPs    []string           `json:"banned_ips"`
+	Rooms        []domainrooms.Room `json:"rooms"`
+	Auth         AuthConfig         `json:"auth"`
 }
 
 const (
@@ -104,9 +105,9 @@ func migrateConfig(cfg *Config) bool {
 	}
 	if len(cfg.Rooms) > 0 {
 		if cfg.Rooms[0].Grants == nil {
-			cfg.Rooms[0].Grants = make(map[string][]RoomPermission)
+			cfg.Rooms[0].Grants = make(map[string][]domainrooms.RoomPermission)
 		}
-		cfg.Rooms[0].Grants[EveryoneRoomGrant] = append([]RoomPermission(nil), roomPermissions...)
+		cfg.Rooms[0].Grants[domainrooms.EveryoneRoomGrant] = append([]domainrooms.RoomPermission(nil), domainrooms.SupportedPermissions...)
 	}
 	cfg.Version = currentConfigVersion
 	return true

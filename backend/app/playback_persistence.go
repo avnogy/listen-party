@@ -7,9 +7,11 @@ import (
 	"log/slog"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
+	"listen-party/backend/rooms"
 )
 
-func (s *Server) savePlayback(ctx context.Context, room *Room) error {
+func (s *Server) savePlayback(ctx context.Context, room *rooms.Room) error {
 	if s.Library == nil || room == nil {
 		return nil
 	}
@@ -38,7 +40,7 @@ func (s *Server) restorePlayback(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		var state PersistedPlayback
+		var state playback.PersistedPlayback
 		if err := json.Unmarshal(snapshot.State, &state); err != nil {
 			slog.Warn("ignore corrupt room playback snapshot", "room", snapshot.RoomID, "error", err)
 			continue

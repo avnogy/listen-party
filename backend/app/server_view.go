@@ -6,22 +6,24 @@ import (
 	"net/http"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
+	"listen-party/backend/rooms"
 )
 
 type ViewState struct {
-	PlaybackState
-	Current     *ViewItem        `json:"current"`
-	Queue       []ViewItem       `json:"queue"`
-	History     []ViewItem       `json:"history"`
-	Permissions []RoomPermission `json:"permissions"`
+	playback.PlaybackState
+	Current     *ViewItem              `json:"current"`
+	Queue       []ViewItem             `json:"queue"`
+	History     []ViewItem             `json:"history"`
+	Permissions []rooms.RoomPermission `json:"permissions"`
 }
 
 type ViewItem struct {
-	PlaybackItem
+	playback.PlaybackItem
 	Track *musiclib.Track `json:"track"`
 }
 
-func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState, error) {
+func (s *Server) viewState(ctx context.Context, state playback.PlaybackState) (ViewState, error) {
 	keys := make([]string, 0, len(state.Queue)+len(state.History)+1)
 	if state.Current.DedupeKey != "" {
 		keys = append(keys, state.Current.DedupeKey)
@@ -62,7 +64,7 @@ func (s *Server) viewState(ctx context.Context, state PlaybackState) (ViewState,
 	return view, nil
 }
 
-func (s *Server) cachedViewTracks(ctx context.Context, state PlaybackState, keys []string) (map[string]musiclib.Track, error) {
+func (s *Server) cachedViewTracks(ctx context.Context, state playback.PlaybackState, keys []string) (map[string]musiclib.Track, error) {
 	s.viewCacheMu.Lock()
 	defer s.viewCacheMu.Unlock()
 	if cached, ok := s.viewCache[state.RoomID]; ok {
@@ -90,7 +92,7 @@ func (s *Server) invalidateViewCache() {
 	s.viewCacheMu.Unlock()
 }
 
-func (s *Server) viewStateForRequest(r *http.Request, state PlaybackState) (ViewState, error) {
+func (s *Server) viewStateForRequest(r *http.Request, state playback.PlaybackState) (ViewState, error) {
 	user, ok := s.Auth.CurrentUser(r)
 	if !ok {
 		return ViewState{}, errors.New("authentication required")

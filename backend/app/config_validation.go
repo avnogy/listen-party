@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+
+	domainrooms "listen-party/backend/rooms"
 )
 
 func (c Config) Validate() error {
@@ -35,7 +37,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func validateRooms(rooms []Room) error {
+func validateRooms(rooms []domainrooms.Room) error {
 	if len(rooms) == 0 {
 		return errors.New("rooms must contain at least one room")
 	}
@@ -56,7 +58,7 @@ func validateRooms(rooms []Room) error {
 			return fmt.Errorf("room %q name is required", room.ID)
 		}
 		for _, group := range room.AdminGroups {
-			if group == "" || group == EveryoneRoomGrant {
+			if group == "" || group == domainrooms.EveryoneRoomGrant {
 				return fmt.Errorf("room %q has invalid administrator group %q", room.ID, group)
 			}
 		}
@@ -68,7 +70,7 @@ func validateRooms(rooms []Room) error {
 				return fmt.Errorf("room %q group %q must have at least one permission", room.ID, group)
 			}
 			for _, permission := range permissions {
-				if !slices.Contains(roomPermissions, permission) {
+				if !slices.Contains(domainrooms.SupportedPermissions, permission) {
 					return fmt.Errorf("room %q group %q has unknown permission %q", room.ID, group, permission)
 				}
 			}
@@ -78,7 +80,7 @@ func validateRooms(rooms []Room) error {
 				return fmt.Errorf("room %q user overrides must not contain an empty user id", room.ID)
 			}
 			for _, permission := range permissions {
-				if !slices.Contains(roomPermissions, permission) {
+				if !slices.Contains(domainrooms.SupportedPermissions, permission) {
 					return fmt.Errorf("room %q user %q has unknown permission %q", room.ID, userID, permission)
 				}
 			}

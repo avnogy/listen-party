@@ -7,11 +7,13 @@ import (
 	"time"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
+	"listen-party/backend/rooms"
 )
 
 // stabilizeAndSchedulePlayback resolves the current media before arming its
 // timer. Missing tracks are skipped instead of wedging a room.
-func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, state PlaybackState) PlaybackState {
+func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.Room, state playback.PlaybackState) playback.PlaybackState {
 	if s.Library == nil || room == nil {
 		return state
 	}
@@ -57,7 +59,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 			var discarded bool
 			state, discarded = room.Playback.Discard(key)
 			if discarded {
-				state = room.Playback.AddAction(RoomAction{Username: "System", Text: "Removed an unavailable track."})
+				state = room.Playback.AddAction(playback.RoomAction{Username: "System", Text: "Removed an unavailable track."})
 			}
 		} else {
 			state = room.Playback.Ended(key)

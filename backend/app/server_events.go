@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"listen-party/backend/playback"
 )
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +60,7 @@ func writePing(w http.ResponseWriter) bool {
 	return true
 }
 
-func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state PlaybackState) bool {
+func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state playback.PlaybackState) bool {
 	if state.Disconnect {
 		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 			slog.Debug("set sse disconnect write deadline", "error", err)

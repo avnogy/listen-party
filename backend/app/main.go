@@ -14,6 +14,7 @@ import (
 
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/rooms"
 )
 
 func main() {
@@ -67,7 +68,7 @@ func main() {
 		Auth:       authSvc,
 		AuthRoutes: authSvc.Handler(),
 		Library:    lib,
-		Rooms:      NewRoomManager(cfg.Rooms),
+		Rooms:      rooms.NewRoomManager(cfg.Rooms),
 		Config:     cfg,
 		ConfigPath: resolvedConfigPath,
 	}

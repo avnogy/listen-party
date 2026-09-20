@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"listen-party/backend/rooms"
 )
 
 func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
@@ -11,7 +13,7 @@ func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !UserIsRoomAdmin(user, *room) {
+	if !rooms.UserIsRoomAdmin(user, *room) {
 		http.Error(w, "room administration denied", http.StatusForbidden)
 		return
 	}
@@ -23,8 +25,8 @@ func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"id":             room.ID,
 		"name":           room.Name,
-		"grants":         cloneRoomGrants(room.Grants),
-		"user_overrides": cloneRoomGrants(room.UserOverrides),
+		"grants":         rooms.CloneRoomGrants(room.Grants),
+		"user_overrides": rooms.CloneRoomGrants(room.UserOverrides),
 		"users":          users,
 	})
 }
@@ -34,13 +36,13 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !UserIsRoomAdmin(user, *room) {
+	if !rooms.UserIsRoomAdmin(user, *room) {
 		http.Error(w, "room administration denied", http.StatusForbidden)
 		return
 	}
 	var req struct {
-		Grants        map[string][]RoomPermission `json:"grants"`
-		UserOverrides map[string][]RoomPermission `json:"user_overrides"`
+		Grants        map[string][]rooms.RoomPermission `json:"grants"`
+		UserOverrides map[string][]rooms.RoomPermission `json:"user_overrides"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -55,7 +57,7 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for i := range cfg.Rooms {
 		if cfg.Rooms[i].ID == room.ID {
-			if !UserIsRoomAdmin(user, cfg.Rooms[i]) {
+			if !rooms.UserIsRoomAdmin(user, cfg.Rooms[i]) {
 				http.Error(w, "room administration denied", http.StatusForbidden)
 				return
 			}
@@ -82,8 +84,8 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"id":             updated.ID,
 		"name":           updated.Name,
-		"grants":         cloneRoomGrants(updated.Grants),
-		"user_overrides": cloneRoomGrants(updated.UserOverrides),
+		"grants":         rooms.CloneRoomGrants(updated.Grants),
+		"user_overrides": rooms.CloneRoomGrants(updated.UserOverrides),
 	})
 }
 
@@ -92,7 +94,7 @@ func (s *Server) handleRoomAdminDisconnect(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if !UserIsRoomAdmin(user, *room) {
+	if !rooms.UserIsRoomAdmin(user, *room) {
 		http.Error(w, "room administration denied", http.StatusForbidden)
 		return
 	}
@@ -118,16 +120,16 @@ func (s *Server) handleRoomAdminDisconnect(w http.ResponseWriter, r *http.Reques
 func cloneConfig(cfg Config) Config {
 	cfg.MusicDirs = append([]string(nil), cfg.MusicDirs...)
 	cfg.BannedIPs = append([]string(nil), cfg.BannedIPs...)
-	cfg.Rooms = append([]Room(nil), cfg.Rooms...)
+	cfg.Rooms = append([]rooms.Room(nil), cfg.Rooms...)
 	for i := range cfg.Rooms {
 		cfg.Rooms[i].AdminGroups = append([]string(nil), cfg.Rooms[i].AdminGroups...)
-		cfg.Rooms[i].Grants = cloneRoomGrants(cfg.Rooms[i].Grants)
-		cfg.Rooms[i].UserOverrides = cloneRoomGrants(cfg.Rooms[i].UserOverrides)
+		cfg.Rooms[i].Grants = rooms.CloneRoomGrants(cfg.Rooms[i].Grants)
+		cfg.Rooms[i].UserOverrides = rooms.CloneRoomGrants(cfg.Rooms[i].UserOverrides)
 	}
 	return cfg
 }
 
-func removedRoomIDs(oldRooms, newRooms []Room) []string {
+func removedRoomIDs(oldRooms, newRooms []rooms.Room) []string {
 	remaining := make(map[string]struct{}, len(newRooms))
 	for _, room := range newRooms {
 		remaining[room.ID] = struct{}{}

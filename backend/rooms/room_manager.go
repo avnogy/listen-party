@@ -7,8 +7,6 @@ import (
 	"listen-party/backend/playback"
 )
 
-type UserInfo = appauth.UserInfo
-
 type RoomPermission string
 
 const (
@@ -25,6 +23,8 @@ var roomPermissions = []RoomPermission{
 	PermissionPlaybackControl,
 	PermissionVolumeControl,
 }
+
+var SupportedPermissions = append([]RoomPermission(nil), roomPermissions...)
 
 type Room struct {
 	ID            string                      `json:"id"`
@@ -103,14 +103,14 @@ func (m *RoomManager) Get(id string) (*Room, bool) {
 	return room, ok
 }
 
-func (m *RoomManager) UserHasPermission(id string, user UserInfo, permission RoomPermission) bool {
+func (m *RoomManager) UserHasPermission(id string, user appauth.UserInfo, permission RoomPermission) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	room, ok := m.rooms[id]
 	return ok && UserHasRoomPermission(user, *room, permission)
 }
 
-func (m *RoomManager) PermissionsForUser(id string, user UserInfo) ([]RoomPermission, bool) {
+func (m *RoomManager) PermissionsForUser(id string, user appauth.UserInfo) ([]RoomPermission, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	room, ok := m.rooms[id]

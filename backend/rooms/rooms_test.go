@@ -3,6 +3,8 @@ package rooms
 import (
 	"testing"
 	"time"
+
+	. "listen-party/backend/internal/auth"
 )
 
 func TestRoomManagerPreservesPlaybackForUnchangedRooms(t *testing.T) {
@@ -125,7 +127,7 @@ func TestEveryoneRoomGrantAppliesOnlyToAuthenticatedUsers(t *testing.T) {
 		t.Fatal("anonymous identity received everyone permission")
 	}
 	user := UserInfo{ID: "user1", Username: "alice"}
-	for _, permission := range roomPermissions {
+	for _, permission := range SupportedPermissions {
 		if !UserHasRoomPermission(user, room, permission) {
 			t.Fatalf("enabled user missing everyone permission %q", permission)
 		}

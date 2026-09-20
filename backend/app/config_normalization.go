@@ -5,17 +5,19 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	domainrooms "listen-party/backend/rooms"
 )
 
-func normalizeRoomGrants(grants map[string][]RoomPermission) map[string][]RoomPermission {
+func normalizeRoomGrants(grants map[string][]domainrooms.RoomPermission) map[string][]domainrooms.RoomPermission {
 	if len(grants) == 0 {
 		return nil
 	}
-	normalized := make(map[string][]RoomPermission, len(grants))
+	normalized := make(map[string][]domainrooms.RoomPermission, len(grants))
 	for group, permissions := range grants {
 		group = strings.TrimSpace(group)
 		for _, permission := range permissions {
-			permission = RoomPermission(strings.TrimSpace(string(permission)))
+			permission = domainrooms.RoomPermission(strings.TrimSpace(string(permission)))
 			if permission != "" && !slices.Contains(normalized[group], permission) {
 				normalized[group] = append(normalized[group], permission)
 			}

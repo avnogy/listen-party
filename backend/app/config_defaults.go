@@ -6,6 +6,7 @@ import (
 
 	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
+	domainrooms "listen-party/backend/rooms"
 )
 
 func NewDefaultConfig() (Config, error) {
@@ -25,7 +26,7 @@ func NewDefaultConfigForRoot(configDir string) Config {
 		DatabasePath: configpaths.DatabasePath(configDir),
 		ScanWorkers:  defaultScanWorkers,
 		BannedIPs:    []string{},
-		Rooms:        []Room{{ID: defaultRoomID, Name: "Public Room", Grants: openRoomGrants()}},
+		Rooms:        []domainrooms.Room{{ID: defaultRoomID, Name: "Public Room", Grants: domainrooms.OpenRoomGrants()}},
 		Auth:         AuthConfig{PocketBase: appauth.DefaultConfig(configDir)},
 	}
 }
@@ -64,7 +65,7 @@ func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 		c.BannedIPs = []string{}
 	}
 	if len(c.Rooms) == 0 {
-		c.Rooms = []Room{{ID: defaultRoomID, Name: "Public Room", Grants: openRoomGrants()}}
+		c.Rooms = []domainrooms.Room{{ID: defaultRoomID, Name: "Public Room", Grants: domainrooms.OpenRoomGrants()}}
 	}
 	for i := range c.Rooms {
 		c.Rooms[i].ID = strings.TrimSpace(c.Rooms[i].ID)

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
+	. "listen-party/backend/rooms"
 )
 
 func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
@@ -370,7 +372,7 @@ func TestRoomActionLogRecordsQueueClearWithoutListingTracks(t *testing.T) {
 func TestRoomActionLogVisibleWithoutRoomPermissions(t *testing.T) {
 	server, _ := actionLogTestServer(t)
 	room, _ := server.Rooms.Get("main")
-	room.Playback.AddAction(RoomAction{IP: "192.168.1.44", Username: "alice", Text: `Removed "First" from the queue.`})
+	room.Playback.AddAction(playback.RoomAction{IP: "192.168.1.44", Username: "alice", Text: `Removed "First" from the queue.`})
 	server.Auth = fakeAuth{user: UserInfo{Username: "bob"}}
 
 	req := httptest.NewRequest(http.MethodGet, "/rooms/main/api/state", nil)
@@ -430,7 +432,7 @@ func TestRoomAudioCommandUpdatesSharedState(t *testing.T) {
 		t.Fatalf("room_audio status = %d: %s", rec.Code, rec.Body.String())
 	}
 	room, _ := server.Rooms.Get("main")
-	if got := room.Playback.Snapshot().RoomAudio; got != (RoomAudio{Volume: 0.4, Muted: true}) {
+	if got := room.Playback.Snapshot().RoomAudio; got != (playback.RoomAudio{Volume: 0.4, Muted: true}) {
 		t.Fatalf("room audio = %#v", got)
 	}
 	req = httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"room_audio","volume":0.6}`))
@@ -830,7 +832,7 @@ func TestDisconnectSSEEventIsTerminal(t *testing.T) {
 	server := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/rooms/main/events", nil)
 	rec := httptest.NewRecorder()
-	if !server.writeEvent(rec, req, PlaybackState{Disconnect: true}) {
+	if !server.writeEvent(rec, req, playback.PlaybackState{Disconnect: true}) {
 		t.Fatal("disconnect event write failed")
 	}
 	if got := rec.Body.String(); got != "event: disconnect\ndata: {}\n\n" {
