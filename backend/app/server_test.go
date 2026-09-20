@@ -16,6 +16,7 @@ import (
 	"time"
 
 	assets "listen-party"
+	. "listen-party/backend/auth"
 	. "listen-party/backend/config"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"

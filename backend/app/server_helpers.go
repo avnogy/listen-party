@@ -8,13 +8,15 @@ import (
 	"strings"
 	"sync"
 
+	"listen-party/backend/auth"
 	"listen-party/backend/config"
+	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/rooms"
 )
 
 type Server struct {
-	Auth           AuthGate
+	Auth           auth.Gate
 	AuthRoutes     http.Handler
 	Library        *musiclib.Library
 	Rooms          *rooms.RoomManager
@@ -97,7 +99,7 @@ func isAuthRoute(path string) bool {
 	return false
 }
 
-func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms.Room, UserInfo, bool) {
+func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms.Room, appauth.UserInfo, bool) {
 	roomID := r.PathValue("room")
 	if roomID == "" {
 		roomID = s.Rooms.DefaultID()
@@ -105,12 +107,12 @@ func (s *Server) roomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms
 	room, ok := s.Rooms.Get(roomID)
 	if !ok {
 		http.Error(w, "room not found", http.StatusNotFound)
-		return nil, UserInfo{}, false
+		return nil, appauth.UserInfo{}, false
 	}
 	user, ok := s.Auth.CurrentUser(r)
 	if !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return nil, UserInfo{}, false
+		return nil, appauth.UserInfo{}, false
 	}
 	return room, user, true
 }

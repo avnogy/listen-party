@@ -4,11 +4,12 @@ import (
 	"net/http"
 
 	assets "listen-party"
+	appauth "listen-party/backend/internal/auth"
 )
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	requireAdmin := s.Auth.Require(RoleAdmin)
+	requireAdmin := s.Auth.Require(appauth.RoleAdmin)
 	mux.Handle("GET /admin", requireAdmin(http.HandlerFunc(s.handleAdminPage)))
 	mux.Handle("GET /admin.js", requireAdmin(http.HandlerFunc(s.handleAdminJS)))
 	requireUser := s.Auth.Require()

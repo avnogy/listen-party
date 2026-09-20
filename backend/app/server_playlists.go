@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	httpapi "listen-party/backend/http"
+	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 )
 
@@ -210,13 +211,13 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) playlistView(user UserInfo, playlist musiclib.Playlist) playlistView {
+func (s *Server) playlistView(user appauth.UserInfo, playlist musiclib.Playlist) playlistView {
 	return playlistView{
 		Playlist: playlist,
 		CanEdit:  userCanEditPlaylist(user, playlist),
 	}
 }
 
-func userCanEditPlaylist(user UserInfo, playlist musiclib.Playlist) bool {
-	return user.Role == RoleAdmin || playlist.OwnerID == user.ID
+func userCanEditPlaylist(user appauth.UserInfo, playlist musiclib.Playlist) bool {
+	return user.Role == appauth.RoleAdmin || playlist.OwnerID == user.ID
 }
