@@ -16,12 +16,18 @@ import (
 	"time"
 
 	assets "listen-party"
-	. "listen-party/backend/auth"
 	. "listen-party/backend/config"
+	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
 	. "listen-party/backend/rooms"
 )
+
+type Role = appauth.Role
+type UserInfo = appauth.UserInfo
+type UserSummary = appauth.UserSummary
+
+const RoleAdmin = appauth.RoleAdmin
 
 func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 	ctx := context.Background()
