@@ -17,17 +17,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req struct {
-		Action            string       `json:"action"`
-		DedupeKey         string       `json:"dedupe_key"`
-		QueueItemID       int64        `json:"queue_item_id"`
-		BeforeQueueItemID int64        `json:"before_queue_item_id"`
-		PositionMS        int64        `json:"position_ms"`
-		Enabled           bool         `json:"enabled"`
-		Source            AutoDJSource `json:"source"`
-		Volume            float64      `json:"volume"`
-		Muted             bool         `json:"muted"`
-	}
+	var req commandRequest
 	if !readJSON(w, r, &req) {
 		return
 	}
@@ -41,6 +31,22 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	displayName := user.Display()
+	s.dispatchCommandAction(w, r, room, displayName, req)
+}
+
+type commandRequest struct {
+	Action            string       `json:"action"`
+	DedupeKey         string       `json:"dedupe_key"`
+	QueueItemID       int64        `json:"queue_item_id"`
+	BeforeQueueItemID int64        `json:"before_queue_item_id"`
+	PositionMS        int64        `json:"position_ms"`
+	Enabled           bool         `json:"enabled"`
+	Source            AutoDJSource `json:"source"`
+	Volume            float64      `json:"volume"`
+	Muted             bool         `json:"muted"`
+}
+
+func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *Room, displayName string, req commandRequest) {
 	switch req.Action {
 	case "auto_dj":
 		if !req.Enabled {
@@ -214,6 +220,7 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	case "history_clear":
 		s.writeCommandState(w, r, "history_clear", room, displayName, room.Playback.ClearHistory())
 	}
+
 }
 
 func queueItemByID(queue []PlaybackItem, id int64) (PlaybackItem, bool) {
