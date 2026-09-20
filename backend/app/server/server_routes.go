@@ -8,6 +8,7 @@ import (
 	"listen-party/backend/app/events"
 	"listen-party/backend/app/media"
 	"listen-party/backend/app/playlists"
+	"listen-party/backend/app/roomadmin"
 	"listen-party/backend/app/session"
 	appauth "listen-party/backend/internal/auth"
 )
@@ -28,9 +29,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /rooms/{room}/events", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { events.Handle(w, r, s) })))
 	mux.Handle("GET /api/session", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { session.HandleSession(w, r, s) })))
 	mux.Handle("GET /rooms/{room}/api/state", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleState(w, r, s) })))
-	mux.Handle("GET /rooms/{room}/api/admin", requireUser(http.HandlerFunc(s.handleRoomAdmin)))
-	mux.Handle("PUT /rooms/{room}/api/admin", requireUser(http.HandlerFunc(s.handleRoomAdminUpdate)))
-	mux.Handle("POST /rooms/{room}/api/admin/disconnect", requireUser(http.HandlerFunc(s.handleRoomAdminDisconnect)))
+	mux.Handle("GET /rooms/{room}/api/admin", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { roomadmin.Handle(w, r, s) })))
+	mux.Handle("PUT /rooms/{room}/api/admin", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { roomadmin.HandleUpdate(w, r, s) })))
+	mux.Handle("POST /rooms/{room}/api/admin/disconnect", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { roomadmin.HandleDisconnect(w, r, s) })))
 	mux.Handle("GET /api/search", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleSearch(w, r, s) })))
 	mux.Handle("GET /api/library", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { media.HandleLibrary(w, r, s) })))
 	mux.Handle("GET /api/playlists", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { playlists.HandlePlaylists(w, r, s) })))

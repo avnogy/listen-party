@@ -1,17 +1,28 @@
-package server
+package roomadmin
 
 import (
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"listen-party/backend/auth"
 	"listen-party/backend/config"
 	httpapi "listen-party/backend/http"
+	appauth "listen-party/backend/internal/auth"
 	"listen-party/backend/rooms"
 )
 
-func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
-	room, user, ok := s.roomFromRequest(w, r)
+type Host interface {
+	AuthStore() auth.Gate
+	RoomStore() *rooms.RoomManager
+	RoomFromRequest(http.ResponseWriter, *http.Request) (*rooms.Room, appauth.UserInfo, bool)
+	ConfigSnapshot() (config.Config, string)
+	LockConfigUpdate() func()
+	SetConfig(config.Config)
+}
+
+func Handle(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
 	if !ok {
 		return
 	}
@@ -19,7 +30,7 @@ func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room administration denied", http.StatusForbidden)
 		return
 	}
-	users, err := s.Auth.ListEnabledUsers()
+	users, err := host.AuthStore().ListEnabledUsers()
 	if err != nil {
 		httpapi.WriteError(w, err)
 		return
@@ -33,8 +44,8 @@ func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
-	room, user, ok := s.roomFromRequest(w, r)
+func HandleUpdate(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
 	if !ok {
 		return
 	}
@@ -49,13 +60,10 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
-	s.configUpdateMu.Lock()
-	defer s.configUpdateMu.Unlock()
-
-	s.configMu.RLock()
-	cfg := cloneConfig(s.Config)
-	configPath := s.ConfigPath
-	s.configMu.RUnlock()
+	unlockUpdate := host.LockConfigUpdate()
+	defer unlockUpdate()
+	cfg, configPath := host.ConfigSnapshot()
+	cfg = cloneConfig(cfg)
 	found := false
 	for i := range cfg.Rooms {
 		if cfg.Rooms[i].ID == room.ID {
@@ -78,11 +86,9 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.Rooms.Update(cfg.Rooms)
-	s.configMu.Lock()
-	s.Config = cfg
-	s.configMu.Unlock()
-	updated, _ := s.Rooms.Get(room.ID)
+	host.RoomStore().Update(cfg.Rooms)
+	host.SetConfig(cfg)
+	updated, _ := host.RoomStore().Get(room.ID)
 	httpapi.WriteJSON(w, map[string]any{
 		"id":             updated.ID,
 		"name":           updated.Name,
@@ -91,8 +97,8 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleRoomAdminDisconnect(w http.ResponseWriter, r *http.Request) {
-	room, user, ok := s.roomFromRequest(w, r)
+func HandleDisconnect(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
 	if !ok {
 		return
 	}
