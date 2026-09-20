@@ -60,6 +60,8 @@ func (s *Server) ViewStateForRequest(r *http.Request, state playback.PlaybackSta
 	return s.viewStateForRequest(r, state)
 }
 
+func (s *Server) InvalidateViewCache() { s.invalidateViewCache() }
+
 type viewTrackCache struct {
 	revision uint64
 	tracks   map[string]musiclib.Track

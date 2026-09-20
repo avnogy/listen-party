@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"listen-party/backend/app/media"
 	httpapi "listen-party/backend/http"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
@@ -37,7 +38,7 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	id, ok := pathID(w, r, "id")
+	id, ok := media.PathID(w, r, "id")
 	if !ok {
 		return
 	}
@@ -75,7 +76,7 @@ func (s *Server) handlePlaylistAddItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	id, ok := pathID(w, r, "id")
+	id, ok := media.PathID(w, r, "id")
 	if !ok {
 		return
 	}
@@ -116,11 +117,11 @@ func (s *Server) handlePlaylistRemoveItem(w http.ResponseWriter, r *http.Request
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	id, ok := pathID(w, r, "id")
+	id, ok := media.PathID(w, r, "id")
 	if !ok {
 		return
 	}
-	itemID, ok := pathID(w, r, "item")
+	itemID, ok := media.PathID(w, r, "item")
 	if !ok {
 		return
 	}
@@ -152,7 +153,7 @@ func (s *Server) handlePlaylistImportFolder(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	id, ok := pathID(w, r, "id")
+	id, ok := media.PathID(w, r, "id")
 	if !ok {
 		return
 	}
@@ -190,7 +191,7 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	id, ok := pathID(w, r, "id")
+	id, ok := media.PathID(w, r, "id")
 	if !ok {
 		return
 	}
