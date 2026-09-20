@@ -38,7 +38,7 @@ func (s *Server) restorePlayback(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		var state persistedPlayback
+		var state PersistedPlayback
 		if err := json.Unmarshal(snapshot.State, &state); err != nil {
 			slog.Warn("ignore corrupt room playback snapshot", "room", snapshot.RoomID, "error", err)
 			continue

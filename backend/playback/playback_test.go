@@ -1,4 +1,4 @@
-package main
+package playback
 
 import (
 	"errors"
@@ -468,14 +468,14 @@ func TestPlaylistChangesInvalidateAutoDJCandidates(t *testing.T) {
 		t.Fatal("playlist source was not reset")
 	}
 	state := p.Snapshot().AutoDJ
-	if state.Enabled || state.Source != defaultAutoDJSource() {
+	if state.Enabled || state.Source != DefaultAutoDJSource() {
 		t.Fatalf("auto-dj after playlist deletion = %#v", state)
 	}
 }
 
 func TestAutoDJEntriesAreConsumedFromTheShuffledBag(t *testing.T) {
 	p := NewPlayback("main")
-	source := defaultAutoDJSource()
+	source := DefaultAutoDJSource()
 	p.ConfigureAutoDJ(true, "current", []int64{1, 2})
 	p.ClearAutoDJCandidate(source)
 	if !p.BeginAutoDJCandidate(source) {

@@ -17,7 +17,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 	}
 	ctx = context.WithoutCancel(ctx)
 	for state.Current.DedupeKey != "" && !state.Paused {
-		if room.Playback.endTimerMatches(state.Current.DedupeKey, state.StartedAt) {
+		if room.Playback.EndTimerMatches(state.Current.DedupeKey, state.StartedAt) {
 			return state
 		}
 		track, err := s.Library.ResolveDedupeKey(ctx, state.Current.DedupeKey)
@@ -37,14 +37,14 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 			remaining := time.Duration(track.DurationMS)*time.Millisecond - time.Since(state.StartedAt)
 			if remaining > 0 {
 				key, startedAt := state.Current.DedupeKey, state.StartedAt
-				room.Playback.scheduleEnd(remaining, key, startedAt, func() {
+				room.Playback.ScheduleEnd(remaining, key, startedAt, func() {
 					s.advanceScheduledPlayback(room.ID, key, startedAt)
 				})
 				return state
 			}
 		} else if err != nil && !errors.Is(err, musiclib.ErrTrackNotFound) {
 			slog.Warn("resolve playback timer media", "room", room.ID, "dedupe_key", state.Current.DedupeKey, "error", err)
-			room.Playback.cancelEndTimer()
+			room.Playback.CancelEndTimer()
 			return state
 		}
 
@@ -64,7 +64,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *Room, s
 		}
 		s.replenishAutoDJ(ctx, room)
 	}
-	room.Playback.cancelEndTimer()
+	room.Playback.CancelEndTimer()
 	return state
 }
 
@@ -76,7 +76,7 @@ func (s *Server) advanceScheduledPlayback(roomID, dedupeKey string, startedAt ti
 	if err := s.prepareAutoDJ(context.Background(), room); err != nil {
 		slog.Warn("prepare auto-dj at playback end", "room", room.ID, "error", err)
 	}
-	state, advanced := room.Playback.endScheduled(dedupeKey, startedAt)
+	state, advanced := room.Playback.EndScheduled(dedupeKey, startedAt)
 	if !advanced {
 		return
 	}

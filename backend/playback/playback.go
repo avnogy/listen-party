@@ -1,4 +1,4 @@
-package main
+package playback
 
 import (
 	"crypto/rand"
@@ -8,7 +8,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	appauth "listen-party/backend/internal/auth"
 )
+
+type UserInfo = appauth.UserInfo
 
 var (
 	ErrEmptyQueue        = errors.New("queue is empty")
@@ -52,7 +56,7 @@ type RoomAction struct {
 	Text     string    `json:"text"`
 }
 
-func defaultAutoDJSource() AutoDJSource {
+func DefaultAutoDJSource() AutoDJSource {
 	return AutoDJSource{Type: AutoDJSourceLibrary, Name: "Entire Library"}
 }
 
@@ -77,7 +81,7 @@ type PlaybackState struct {
 // persistedPlayback is deliberately limited to user-visible playback intent.
 // Listener state, timers, and Auto-DJ shuffle progress are process-local and
 // are not persisted.
-type persistedPlayback struct {
+type PersistedPlayback struct {
 	Revision           uint64               `json:"-"`
 	Current            string               `json:"current"`
 	CurrentRequestedBy string               `json:"current_requested_by"`
@@ -85,14 +89,14 @@ type persistedPlayback struct {
 	Started            time.Time            `json:"started"`
 	Paused             bool                 `json:"paused"`
 	PausePos           int64                `json:"pause_pos_ms"`
-	Queue              []persistedQueueItem `json:"queue"`
-	History            []persistedQueueItem `json:"history"`
+	Queue              []PersistedQueueItem `json:"queue"`
+	History            []PersistedQueueItem `json:"history"`
 	AutoDJ             AutoDJState          `json:"auto_dj"`
 	RoomAudio          RoomAudio            `json:"room_audio"`
 	Actions            []RoomAction         `json:"actions"`
 }
 
-type persistedQueueItem struct {
+type PersistedQueueItem struct {
 	DedupeKey   string `json:"dedupe_key"`
 	RequestedBy string `json:"requested_by"`
 	Source      string `json:"source"`
@@ -142,7 +146,7 @@ func NewPlayback(roomID string) *Playback {
 	return &Playback{
 		roomID:        roomID,
 		generation:    newPlaybackGeneration(),
-		autoDJ:        AutoDJState{Source: defaultAutoDJSource()},
+		autoDJ:        AutoDJState{Source: DefaultAutoDJSource()},
 		roomAudio:     RoomAudio{Volume: 0.25},
 		notify:        make(map[chan PlaybackState]UserInfo),
 		listeners:     make(map[string]*listenerPresence),
@@ -304,7 +308,7 @@ func (p *Playback) Discard(dedupeKey string) (PlaybackState, bool) {
 	return p.stateLocked(), true
 }
 
-func (p *Playback) endScheduled(dedupeKey string, startedAt time.Time) (PlaybackState, bool) {
+func (p *Playback) EndScheduled(dedupeKey string, startedAt time.Time) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.paused || p.current != dedupeKey || !p.started.Equal(startedAt) {
@@ -316,13 +320,13 @@ func (p *Playback) endScheduled(dedupeKey string, startedAt time.Time) (Playback
 	return p.stateLocked(), true
 }
 
-func (p *Playback) endTimerMatches(dedupeKey string, startedAt time.Time) bool {
+func (p *Playback) EndTimerMatches(dedupeKey string, startedAt time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.endTimer != nil && p.current == dedupeKey && p.started.Equal(startedAt) && p.endTimerStartedAt.Equal(startedAt)
 }
 
-func (p *Playback) scheduleEnd(after time.Duration, dedupeKey string, startedAt time.Time, callback func()) {
+func (p *Playback) ScheduleEnd(after time.Duration, dedupeKey string, startedAt time.Time, callback func()) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.paused || p.current != dedupeKey || !p.started.Equal(startedAt) {
@@ -335,7 +339,7 @@ func (p *Playback) scheduleEnd(after time.Duration, dedupeKey string, startedAt 
 	p.endTimer = time.AfterFunc(after, callback)
 }
 
-func (p *Playback) cancelEndTimer() {
+func (p *Playback) CancelEndTimer() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.endTimer != nil {
@@ -441,13 +445,13 @@ func (p *Playback) Snapshot() PlaybackState {
 	return p.stateLocked()
 }
 
-func (p *Playback) PersistentState() persistedPlayback {
+func (p *Playback) PersistentState() PersistedPlayback {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.persistentStateLocked()
 }
 
-func (p *Playback) RestorePersistentState(state persistedPlayback, revision uint64) {
+func (p *Playback) RestorePersistentState(state PersistedPlayback, revision uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.revision = revision
@@ -484,7 +488,7 @@ func (p *Playback) RestorePersistentState(state persistedPlayback, revision uint
 	}
 	p.autoDJ = state.AutoDJ
 	if p.autoDJ.Source.Type == "" {
-		p.autoDJ.Source = defaultAutoDJSource()
+		p.autoDJ.Source = DefaultAutoDJSource()
 	}
 	p.autoDJNext = ""
 	p.autoDJEntries = nil
@@ -626,7 +630,7 @@ func (p *Playback) ResetAutoDJPlaylistSource(playlistID int64) bool {
 	if p.autoDJ.Source.Type != AutoDJSourcePlaylist || p.autoDJ.Source.PlaylistID != playlistID {
 		return false
 	}
-	p.autoDJ = AutoDJState{Source: defaultAutoDJSource()}
+	p.autoDJ = AutoDJState{Source: DefaultAutoDJSource()}
 	p.autoDJNext = ""
 	p.autoDJEntries = nil
 	p.autoDJPreparing = false
@@ -837,8 +841,8 @@ func (p *Playback) stateLocked() PlaybackState {
 	}
 }
 
-func (p *Playback) persistentStateLocked() persistedPlayback {
-	return persistedPlayback{
+func (p *Playback) persistentStateLocked() PersistedPlayback {
+	return PersistedPlayback{
 		Revision:           p.revision,
 		Current:            p.current,
 		CurrentRequestedBy: p.currentRequestedBy,
@@ -854,10 +858,10 @@ func (p *Playback) persistentStateLocked() persistedPlayback {
 	}
 }
 
-func persistedQueue(queue []PlaybackItem) []persistedQueueItem {
-	persisted := make([]persistedQueueItem, 0, len(queue))
+func persistedQueue(queue []PlaybackItem) []PersistedQueueItem {
+	persisted := make([]PersistedQueueItem, 0, len(queue))
 	for _, item := range queue {
-		persisted = append(persisted, persistedQueueItem{
+		persisted = append(persisted, PersistedQueueItem{
 			DedupeKey:   item.DedupeKey,
 			RequestedBy: item.RequestedBy,
 			Source:      item.Source,
