@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"listen-party/backend/app/view"
 	"listen-party/backend/auth"
 	"listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
@@ -57,14 +59,40 @@ func (s *Server) RoomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms
 }
 
 func (s *Server) ViewStateForRequest(r *http.Request, state playback.PlaybackState) (any, error) {
-	return s.viewStateForRequest(r, state)
+	return view.ForRequest(r, state, s)
 }
 
-func (s *Server) InvalidateViewCache() { s.invalidateViewCache() }
+func (s *Server) InvalidateViewCache() {
+	s.viewCacheMu.Lock()
+	clear(s.viewCache)
+	s.viewCacheMu.Unlock()
+}
 
 type viewTrackCache struct {
 	revision uint64
 	tracks   map[string]musiclib.Track
+}
+
+func (s *Server) CachedViewTracks(ctx context.Context, state playback.PlaybackState, keys []string) (map[string]musiclib.Track, error) {
+	s.viewCacheMu.Lock()
+	defer s.viewCacheMu.Unlock()
+	if cached, ok := s.viewCache[state.RoomID]; ok {
+		if cached.revision == state.Revision {
+			return cached.tracks, nil
+		}
+		if cached.revision > state.Revision {
+			return s.Library.ListByDedupeKeys(ctx, keys)
+		}
+	}
+	tracks, err := s.Library.ListByDedupeKeys(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	if s.viewCache == nil {
+		s.viewCache = make(map[string]viewTrackCache)
+	}
+	s.viewCache[state.RoomID] = viewTrackCache{revision: state.Revision, tracks: tracks}
+	return tracks, nil
 }
 
 const maxFolderImportFiles = 50_000

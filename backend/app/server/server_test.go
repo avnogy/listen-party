@@ -17,6 +17,7 @@ import (
 
 	assets "listen-party"
 	"listen-party/backend/app/events"
+	"listen-party/backend/app/view"
 	. "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
@@ -391,7 +392,7 @@ func TestRoomActionLogVisibleWithoutRoomPermissions(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("state status = %d: %s", rec.Code, rec.Body.String())
 	}
-	var view ViewState
+	var view view.ViewState
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}
@@ -895,7 +896,7 @@ func getStatePermissions(t *testing.T, handler http.Handler) []RoomPermission {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("state status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	var state ViewState
+	var state view.ViewState
 	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +955,7 @@ func actionLogTestServer(t *testing.T) (*Server, map[string]musiclib.Track) {
 	return server, byTitle
 }
 
-func postCommand(t *testing.T, server *Server, body string) ViewState {
+func postCommand(t *testing.T, server *Server, body string) view.ViewState {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(body))
 	req.RemoteAddr = "192.168.1.44:55123"
@@ -963,7 +964,7 @@ func postCommand(t *testing.T, server *Server, body string) ViewState {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("command %s status = %d: %s", body, rec.Code, rec.Body.String())
 	}
-	var view ViewState
+	var view view.ViewState
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}

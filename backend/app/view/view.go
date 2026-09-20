@@ -1,14 +1,21 @@
-package server
+package view
 
 import (
 	"context"
 	"errors"
 	"net/http"
 
+	"listen-party/backend/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
 )
+
+type Host interface {
+	AuthStore() auth.Gate
+	RoomStore() *rooms.RoomManager
+	CachedViewTracks(context.Context, playback.PlaybackState, []string) (map[string]musiclib.Track, error)
+}
 
 type ViewState struct {
 	playback.PlaybackState
@@ -23,7 +30,7 @@ type ViewItem struct {
 	Track *musiclib.Track `json:"track"`
 }
 
-func (s *Server) viewState(ctx context.Context, state playback.PlaybackState) (ViewState, error) {
+func Build(ctx context.Context, state playback.PlaybackState, host Host) (ViewState, error) {
 	keys := make([]string, 0, len(state.Queue)+len(state.History)+1)
 	if state.Current.DedupeKey != "" {
 		keys = append(keys, state.Current.DedupeKey)
@@ -34,7 +41,7 @@ func (s *Server) viewState(ctx context.Context, state playback.PlaybackState) (V
 	for _, item := range state.History {
 		keys = append(keys, item.DedupeKey)
 	}
-	tracks, err := s.cachedViewTracks(ctx, state, keys)
+	tracks, err := host.CachedViewTracks(ctx, state, keys)
 	if err != nil {
 		return ViewState{}, err
 	}
@@ -64,44 +71,16 @@ func (s *Server) viewState(ctx context.Context, state playback.PlaybackState) (V
 	return view, nil
 }
 
-func (s *Server) cachedViewTracks(ctx context.Context, state playback.PlaybackState, keys []string) (map[string]musiclib.Track, error) {
-	s.viewCacheMu.Lock()
-	defer s.viewCacheMu.Unlock()
-	if cached, ok := s.viewCache[state.RoomID]; ok {
-		if cached.revision == state.Revision {
-			return cached.tracks, nil
-		}
-		if cached.revision > state.Revision {
-			return s.Library.ListByDedupeKeys(ctx, keys)
-		}
-	}
-	tracks, err := s.Library.ListByDedupeKeys(ctx, keys)
-	if err != nil {
-		return nil, err
-	}
-	if s.viewCache == nil {
-		s.viewCache = make(map[string]viewTrackCache)
-	}
-	s.viewCache[state.RoomID] = viewTrackCache{revision: state.Revision, tracks: tracks}
-	return tracks, nil
-}
-
-func (s *Server) invalidateViewCache() {
-	s.viewCacheMu.Lock()
-	clear(s.viewCache)
-	s.viewCacheMu.Unlock()
-}
-
-func (s *Server) viewStateForRequest(r *http.Request, state playback.PlaybackState) (ViewState, error) {
-	user, ok := s.Auth.CurrentUser(r)
+func ForRequest(r *http.Request, state playback.PlaybackState, host Host) (ViewState, error) {
+	user, ok := host.AuthStore().CurrentUser(r)
 	if !ok {
 		return ViewState{}, errors.New("authentication required")
 	}
-	permissions, ok := s.Rooms.PermissionsForUser(state.RoomID, user)
+	permissions, ok := host.RoomStore().PermissionsForUser(state.RoomID, user)
 	if !ok {
 		return ViewState{}, errors.New("room not found")
 	}
-	view, err := s.viewState(r.Context(), state)
+	view, err := Build(r.Context(), state, host)
 	if err != nil {
 		return ViewState{}, err
 	}

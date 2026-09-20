@@ -18,7 +18,7 @@ func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event
 		http.Error(w, "save playback state", http.StatusInternalServerError)
 		return
 	}
-	view, err := s.viewStateForRequest(r, state)
+	view, err := s.ViewStateForRequest(r, state)
 	if err != nil {
 		slog.Warn("build view state", "remote", r.RemoteAddr, "error", err)
 		httpapi.WriteError(w, err)
