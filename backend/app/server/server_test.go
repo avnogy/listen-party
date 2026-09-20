@@ -16,6 +16,7 @@ import (
 	"time"
 
 	assets "listen-party"
+	"listen-party/backend/app/events"
 	. "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
@@ -838,10 +839,8 @@ func TestRoomAdministratorDisconnectsListenerSession(t *testing.T) {
 }
 
 func TestDisconnectSSEEventIsTerminal(t *testing.T) {
-	server := &Server{}
-	req := httptest.NewRequest(http.MethodGet, "/rooms/main/events", nil)
 	rec := httptest.NewRecorder()
-	if !server.writeEvent(rec, req, playback.PlaybackState{Disconnect: true}) {
+	if !events.WriteDisconnect(rec) {
 		t.Fatal("disconnect event write failed")
 	}
 	if got := rec.Body.String(); got != "event: disconnect\ndata: {}\n\n" {
@@ -851,7 +850,7 @@ func TestDisconnectSSEEventIsTerminal(t *testing.T) {
 
 func TestSSEPingIsNotState(t *testing.T) {
 	rec := httptest.NewRecorder()
-	if !writePing(rec) {
+	if !events.WritePing(rec) {
 		t.Fatal("ping write failed")
 	}
 	if got := rec.Body.String(); got != ": ping\n\n" {

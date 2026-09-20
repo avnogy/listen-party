@@ -12,6 +12,7 @@ import (
 	"listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
 )
 
@@ -53,6 +54,10 @@ func (s *Server) AuthStore() auth.Gate { return s.Auth }
 
 func (s *Server) RoomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms.Room, appauth.UserInfo, bool) {
 	return s.roomFromRequest(w, r)
+}
+
+func (s *Server) ViewStateForRequest(r *http.Request, state playback.PlaybackState) (any, error) {
+	return s.viewStateForRequest(r, state)
 }
 
 type viewTrackCache struct {

@@ -5,6 +5,7 @@ import (
 
 	assets "listen-party"
 	"listen-party/backend/app/configuration"
+	"listen-party/backend/app/events"
 	"listen-party/backend/app/session"
 	appauth "listen-party/backend/internal/auth"
 )
@@ -22,7 +23,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(session.HandleFavicon))
 	mux.Handle("GET /rooms/{room}", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { session.HandleApp(w, r, s) })))
 	mux.Handle("GET /assets/", requireUser(http.StripPrefix("/assets/", webFiles)))
-	mux.Handle("GET /rooms/{room}/events", requireUser(http.HandlerFunc(s.handleEvents)))
+	mux.Handle("GET /rooms/{room}/events", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { events.Handle(w, r, s) })))
 	mux.Handle("GET /api/session", requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { session.HandleSession(w, r, s) })))
 	mux.Handle("GET /rooms/{room}/api/state", requireUser(http.HandlerFunc(s.handleState)))
 	mux.Handle("GET /rooms/{room}/api/admin", requireUser(http.HandlerFunc(s.handleRoomAdmin)))

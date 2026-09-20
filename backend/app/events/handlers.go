@@ -1,4 +1,4 @@
-package server
+package events
 
 import (
 	"encoding/json"
@@ -7,11 +7,18 @@ import (
 	"net/http"
 	"time"
 
+	appauth "listen-party/backend/internal/auth"
 	"listen-party/backend/playback"
+	"listen-party/backend/rooms"
 )
 
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	room, user, ok := s.roomFromRequest(w, r)
+type Host interface {
+	RoomFromRequest(http.ResponseWriter, *http.Request) (*rooms.Room, appauth.UserInfo, bool)
+	ViewStateForRequest(*http.Request, playback.PlaybackState) (any, error)
+}
+
+func Handle(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
 	if !ok {
 		return
 	}
@@ -35,18 +42,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-lifetime.C:
 			return
 		case state, ok := <-ch:
-			if !ok || !s.writeEvent(w, r, state) {
+			if !ok || !writeEvent(w, r, state, host) {
 				return
 			}
 		case <-ticker.C:
-			if !writePing(w) {
+			if !WritePing(w) {
 				return
 			}
 		}
 	}
 }
 
-func writePing(w http.ResponseWriter) bool {
+func WritePing(w http.ResponseWriter) bool {
 	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		slog.Debug("set sse ping write deadline", "error", err)
 	}
@@ -60,21 +67,25 @@ func writePing(w http.ResponseWriter) bool {
 	return true
 }
 
-func (s *Server) writeEvent(w http.ResponseWriter, r *http.Request, state playback.PlaybackState) bool {
-	if state.Disconnect {
-		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			slog.Debug("set sse disconnect write deadline", "error", err)
-		}
-		if _, err := fmt.Fprint(w, "event: disconnect\ndata: {}\n\n"); err != nil {
-			slog.Warn("write sse disconnect", "error", err)
-			return false
-		}
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-		return true
+func WriteDisconnect(w http.ResponseWriter) bool {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		slog.Debug("set sse disconnect write deadline", "error", err)
 	}
-	payload, err := s.viewStateForRequest(r, state)
+	if _, err := fmt.Fprint(w, "event: disconnect\ndata: {}\n\n"); err != nil {
+		slog.Warn("write sse disconnect", "error", err)
+		return false
+	}
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return true
+}
+
+func writeEvent(w http.ResponseWriter, r *http.Request, state playback.PlaybackState, host Host) bool {
+	if state.Disconnect {
+		return WriteDisconnect(w)
+	}
+	payload, err := host.ViewStateForRequest(r, state)
 	if err != nil {
 		slog.Warn("build sse state", "error", err)
 		return false
