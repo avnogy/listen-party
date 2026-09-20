@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
   set -eux; \
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags="-s -w" -o /out/listen-party .
+  go build -trimpath -ldflags="-s -w" -o /out/listen-party ./backend
 
 FROM alpine:3.22
 

@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	appauth "listen-party/internal/auth"
+	appauth "listen-party/backend/internal/auth"
 )
 
 type Role = appauth.Role

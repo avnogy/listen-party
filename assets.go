@@ -1,4 +1,4 @@
-package main
+package assets
 
 import (
 	"embed"
@@ -6,21 +6,21 @@ import (
 )
 
 //go:embed frontend/index.html frontend/style.css frontend/styles/*.css frontend/app.js frontend/app/*.js frontend/vendor/* frontend/favicon.ico
-var webFS embed.FS
+var WebFS embed.FS
 
 //go:embed frontend/admin.html frontend/admin.js frontend/admin/*.js
-var adminFS embed.FS
+var AdminFS embed.FS
 
-func webRoot() fs.FS {
-	root, err := fs.Sub(webFS, "frontend")
+func WebRoot() fs.FS {
+	root, err := fs.Sub(WebFS, "frontend")
 	if err != nil {
 		panic(err)
 	}
 	return root
 }
 
-func adminRoot() fs.FS {
-	root, err := fs.Sub(adminFS, "frontend")
+func AdminRoot() fs.FS {
+	root, err := fs.Sub(AdminFS, "frontend")
 	if err != nil {
 		panic(err)
 	}

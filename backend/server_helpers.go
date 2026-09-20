@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 type Server struct {

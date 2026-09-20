@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	appauth "listen-party/internal/auth"
-	musiclib "listen-party/internal/library"
+	appauth "listen-party/backend/internal/auth"
+	musiclib "listen-party/backend/internal/library"
 )
 
 func main() {

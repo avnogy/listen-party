@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 func (s *Server) savePlayback(ctx context.Context, room *Room) error {

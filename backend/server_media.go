@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-import musiclib "listen-party/internal/library"
+import musiclib "listen-party/backend/internal/library"
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	room, user, ok := s.roomFromRequest(w, r)

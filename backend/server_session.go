@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {

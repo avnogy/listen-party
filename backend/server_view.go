@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 type ViewState struct {

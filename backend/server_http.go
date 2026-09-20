@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 
 	_ "modernc.org/sqlite"
 )

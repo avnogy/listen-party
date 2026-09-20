@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 type playlistView struct {

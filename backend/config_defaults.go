@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	appauth "listen-party/internal/auth"
+	appauth "listen-party/backend/internal/auth"
 )
 
 func NewDefaultConfig() (Config, error) {

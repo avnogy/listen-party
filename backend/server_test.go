@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {

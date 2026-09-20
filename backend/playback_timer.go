@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	musiclib "listen-party/internal/library"
+	musiclib "listen-party/backend/internal/library"
 )
 
 // stabilizeAndSchedulePlayback resolves the current media before arming its

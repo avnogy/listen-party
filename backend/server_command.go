@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-import musiclib "listen-party/internal/library"
+import musiclib "listen-party/backend/internal/library"
 
 func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	room, user, ok := s.roomFromRequest(w, r)

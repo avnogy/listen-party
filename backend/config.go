@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	appauth "listen-party/internal/auth"
+	appauth "listen-party/backend/internal/auth"
 )
 
 type AuthConfig struct {
