@@ -1,7 +1,8 @@
 package server
 
 import (
-	"errors"
+	"context"
+	"listen-party/backend/app/commands"
 	httpapi "listen-party/backend/http"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
@@ -9,7 +10,19 @@ import (
 	"net/http"
 )
 
-var errAutoDJConfigurationChanged = errors.New("auto-dj configuration changed")
+func (s *Server) SavePlayback(ctx context.Context, room *rooms.Room) error {
+	return s.savePlayback(ctx, room)
+}
+func (s *Server) StabilizeAndSchedulePlayback(ctx context.Context, room *rooms.Room, state playback.PlaybackState) playback.PlaybackState {
+	return s.stabilizeAndSchedulePlayback(ctx, room, state)
+}
+func (s *Server) WriteCommandState(w http.ResponseWriter, r *http.Request, event string, room *rooms.Room, username string, state playback.PlaybackState) {
+	s.writeCommandState(w, r, event, room, username, state)
+}
+
+func permissionForAction(action string) (rooms.RoomPermission, bool) {
+	return commands.PermissionForAction(action)
+}
 
 func (s *Server) writeCommandState(w http.ResponseWriter, r *http.Request, event string, room *rooms.Room, username string, state playback.PlaybackState) {
 	state = s.stabilizeAndSchedulePlayback(r.Context(), room, state)

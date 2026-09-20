@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"listen-party/backend/app/commands"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
@@ -51,7 +52,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.R
 		}
 
 		key := state.Current.DedupeKey
-		if err := s.prepareAutoDJ(ctx, room); err != nil {
+		if err := commands.PrepareAutoDJ(ctx, room, s); err != nil {
 			slog.Warn("prepare auto-dj while advancing playback", "room", room.ID, "error", err)
 		}
 		if unavailable || err != nil {
@@ -64,7 +65,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.R
 		} else {
 			state = room.Playback.Ended(key)
 		}
-		s.replenishAutoDJ(ctx, room)
+		commands.ReplenishAutoDJ(ctx, room, s)
 	}
 	room.Playback.CancelEndTimer()
 	return state
@@ -75,14 +76,14 @@ func (s *Server) advanceScheduledPlayback(roomID, dedupeKey string, startedAt ti
 	if !ok {
 		return
 	}
-	if err := s.prepareAutoDJ(context.Background(), room); err != nil {
+	if err := commands.PrepareAutoDJ(context.Background(), room, s); err != nil {
 		slog.Warn("prepare auto-dj at playback end", "room", room.ID, "error", err)
 	}
 	state, advanced := room.Playback.EndScheduled(dedupeKey, startedAt)
 	if !advanced {
 		return
 	}
-	s.replenishAutoDJ(context.Background(), room)
+	commands.ReplenishAutoDJ(context.Background(), room, s)
 	s.stabilizeAndSchedulePlayback(context.Background(), room, state)
 	if err := s.savePlayback(context.Background(), room); err != nil {
 		slog.Error("save scheduled playback state", "room", room.ID, "error", err)

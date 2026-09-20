@@ -1,4 +1,4 @@
-package server
+package commands
 
 import (
 	"context"
@@ -6,17 +6,45 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+
+	"listen-party/backend/auth"
+	httpapi "listen-party/backend/http"
+	appauth "listen-party/backend/internal/auth"
+	musiclib "listen-party/backend/internal/library"
+	"listen-party/backend/playback"
+	"listen-party/backend/rooms"
 )
 
-import httpapi "listen-party/backend/http"
-import musiclib "listen-party/backend/internal/library"
-import "listen-party/backend/playback"
-import "listen-party/backend/rooms"
+type Host interface {
+	AuthStore() auth.Gate
+	RoomFromRequest(http.ResponseWriter, *http.Request) (*rooms.Room, appauth.UserInfo, bool)
+	LibraryStore() *musiclib.Library
+	RoomStore() *rooms.RoomManager
+	SavePlayback(context.Context, *rooms.Room) error
+	StabilizeAndSchedulePlayback(context.Context, *rooms.Room, playback.PlaybackState) playback.PlaybackState
+	ViewStateForRequest(*http.Request, playback.PlaybackState) (any, error)
+	WriteCommandState(http.ResponseWriter, *http.Request, string, *rooms.Room, string, playback.PlaybackState)
+}
 
-func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
-	room, user, ok := s.roomFromRequest(w, r)
+const maxRoomVolume = 0.5
+
+func clientIP(remoteAddr string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = strings.Trim(remoteAddr, "[]")
+	}
+	ip, err := netip.ParseAddr(host)
+	return ip, err == nil
+}
+
+var errAutoDJConfigurationChanged = errors.New("auto-dj configuration changed")
+
+func Handle(w http.ResponseWriter, r *http.Request, host Host) {
+	room, user, ok := host.RoomFromRequest(w, r)
 	if !ok {
 		return
 	}
@@ -24,17 +52,17 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
-	permission, known := permissionForAction(req.Action)
+	permission, known := PermissionForAction(req.Action)
 	if !known {
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
 	}
-	if !s.Rooms.UserHasPermission(room.ID, user, permission) {
+	if !host.RoomStore().UserHasPermission(room.ID, user, permission) {
 		http.Error(w, "room permission denied", http.StatusForbidden)
 		return
 	}
 	displayName := user.Display()
-	s.dispatchCommandAction(w, r, room, displayName, req)
+	dispatchCommandAction(w, r, room, displayName, req, host)
 }
 
 type commandRequest struct {
@@ -49,15 +77,15 @@ type commandRequest struct {
 	Muted             bool                  `json:"muted"`
 }
 
-func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.Room, displayName string, req commandRequest) {
+func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.Room, displayName string, req commandRequest, host Host) {
 	switch req.Action {
 	case "auto_dj":
 		if !req.Enabled {
-			s.writeCommandState(w, r, "auto_dj_disable", room, displayName, room.Playback.ConfigureAutoDJ(false, "", nil))
+			host.WriteCommandState(w, r, "auto_dj_disable", room, displayName, room.Playback.ConfigureAutoDJ(false, "", nil))
 			return
 		}
 		config, _ := room.Playback.AutoDJConfiguration()
-		candidate, entries, err := s.newAutoDJCycle(r.Context(), config.Source)
+		candidate, entries, err := newAutoDJCycle(r.Context(), config.Source, host)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
@@ -67,9 +95,9 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 			http.Error(w, "shuffle source changed; retry", http.StatusConflict)
 			return
 		}
-		s.writeCommandState(w, r, "auto_dj_enable", room, displayName, state)
+		host.WriteCommandState(w, r, "auto_dj_enable", room, displayName, state)
 	case "auto_dj_source":
-		source, err := s.resolveAutoDJSource(r.Context(), req.Source)
+		source, err := resolveAutoDJSource(r.Context(), req.Source, host)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -78,14 +106,14 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		if !config.Enabled {
 			var available bool
 			if source.Type == playback.AutoDJSourceLibrary {
-				count, err := s.Library.Count(r.Context())
+				count, err := host.LibraryStore().Count(r.Context())
 				if err != nil {
 					httpapi.WriteError(w, err)
 					return
 				}
 				available = count > 0
 			} else {
-				entries, err := s.Library.PlaylistShuffleItemIDs(r.Context(), source.PlaylistID)
+				entries, err := host.LibraryStore().PlaylistShuffleItemIDs(r.Context(), source.PlaylistID)
 				if err != nil {
 					httpapi.WriteError(w, err)
 					return
@@ -96,34 +124,34 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 				http.Error(w, "shuffle source contains no available tracks", http.StatusConflict)
 				return
 			}
-			s.writeCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, "", nil))
+			host.WriteCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, "", nil))
 			return
 		}
-		candidate, entries, err := s.newAutoDJCycle(r.Context(), source)
+		candidate, entries, err := newAutoDJCycle(r.Context(), source, host)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
 		}
-		s.writeCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, candidate, entries))
+		host.WriteCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, candidate, entries))
 	case "queue_add":
 		if req.DedupeKey == "" {
 			http.Error(w, "dedupe_key is required", http.StatusBadRequest)
 			return
 		}
-		track, err := s.Library.ResolveDedupeKey(r.Context(), req.DedupeKey)
+		track, err := host.LibraryStore().ResolveDedupeKey(r.Context(), req.DedupeKey)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
 		}
 		if track.DurationMS <= 0 {
-			s.Library.EnsureDuration(track.ID)
+			host.LibraryStore().EnsureDuration(track.ID)
 		}
 		state, err := room.Playback.Add(req.DedupeKey, displayName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		s.writeCommandState(w, r, "queue_add", room, displayName, state)
+		host.WriteCommandState(w, r, "queue_add", room, displayName, state)
 	case "queue_remove":
 		if req.QueueItemID <= 0 {
 			http.Error(w, "queue_item_id is required", http.StatusBadRequest)
@@ -133,9 +161,9 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 		removed, ok := queueItemByID(before.Queue, req.QueueItemID)
 		state := room.Playback.Remove(req.QueueItemID)
 		if ok && len(state.Queue) != len(before.Queue) {
-			state = s.recordRoomAction(r, room, displayName, fmt.Sprintf("Removed %q from the queue.", s.trackActionName(r.Context(), removed.DedupeKey)))
+			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Removed %q from the queue.", trackActionName(r.Context(), removed.DedupeKey, host)), host)
 		}
-		s.writeCommandState(w, r, "queue_remove", room, displayName, state)
+		host.WriteCommandState(w, r, "queue_remove", room, displayName, state)
 	case "queue_reorder":
 		if req.QueueItemID <= 0 {
 			http.Error(w, "queue_item_id is required", http.StatusBadRequest)
@@ -154,21 +182,21 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		if movedOK && queueOrderChanged(before.Queue, state.Queue) {
-			movedName := s.trackActionName(r.Context(), moved.DedupeKey)
+			movedName := trackActionName(r.Context(), moved.DedupeKey, host)
 			if req.BeforeQueueItemID == 0 {
-				state = s.recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q to the end of the queue.", movedName))
+				state = recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q to the end of the queue.", movedName), host)
 			} else if targetOK {
-				state = s.recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q before %q in the queue.", movedName, s.trackActionName(r.Context(), target.DedupeKey)))
+				state = recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q before %q in the queue.", movedName, trackActionName(r.Context(), target.DedupeKey, host)), host)
 			}
 		}
-		s.writeCommandState(w, r, "queue_reorder", room, displayName, state)
+		host.WriteCommandState(w, r, "queue_reorder", room, displayName, state)
 	case "queue_clear":
 		before := room.Playback.Snapshot()
 		state := room.Playback.Clear()
 		if len(before.Queue) > 0 {
-			state = s.recordRoomAction(r, room, displayName, "Cleared the queue.")
+			state = recordRoomAction(r, room, displayName, "Cleared the queue.", host)
 		}
-		s.writeCommandState(w, r, "queue_clear", room, displayName, state)
+		host.WriteCommandState(w, r, "queue_clear", room, displayName, state)
 	case "play":
 		state, err := room.Playback.Play()
 		if err != nil {
@@ -176,52 +204,52 @@ func (s *Server) dispatchCommandAction(w http.ResponseWriter, r *http.Request, r
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		s.writeCommandState(w, r, "play", room, displayName, state)
+		host.WriteCommandState(w, r, "play", room, displayName, state)
 	case "play_now":
 		if req.DedupeKey == "" {
 			http.Error(w, "dedupe_key is required", http.StatusBadRequest)
 			return
 		}
-		track, err := s.Library.ResolveDedupeKey(r.Context(), req.DedupeKey)
+		track, err := host.LibraryStore().ResolveDedupeKey(r.Context(), req.DedupeKey)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
 		}
 		if track.DurationMS <= 0 {
-			s.Library.EnsureDuration(track.ID)
+			host.LibraryStore().EnsureDuration(track.ID)
 		}
 		before := room.Playback.Snapshot()
 		state := room.Playback.PlayNow(req.DedupeKey, displayName)
 		if before.Current.DedupeKey != "" {
-			state = s.recordRoomAction(r, room, displayName, fmt.Sprintf("Played %q now, replacing %q.", trackActionTitle(track), s.trackActionName(r.Context(), before.Current.DedupeKey)))
+			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Played %q now, replacing %q.", trackActionTitle(track), trackActionName(r.Context(), before.Current.DedupeKey, host)), host)
 		}
-		s.writeCommandState(w, r, "play_now", room, displayName, state)
+		host.WriteCommandState(w, r, "play_now", room, displayName, state)
 	case "pause":
-		s.writeCommandState(w, r, "pause", room, displayName, room.Playback.Pause())
+		host.WriteCommandState(w, r, "pause", room, displayName, room.Playback.Pause())
 	case "room_audio":
 		if req.Volume < 0 || req.Volume > maxRoomVolume {
 			http.Error(w, "volume must be between 0 and 0.5", http.StatusBadRequest)
 			return
 		}
-		s.writeCommandState(w, r, "room_audio", room, displayName, room.Playback.SetRoomAudio(req.Volume, req.Muted))
+		host.WriteCommandState(w, r, "room_audio", room, displayName, room.Playback.SetRoomAudio(req.Volume, req.Muted))
 	case "previous":
-		s.writeCommandState(w, r, "previous", room, displayName, room.Playback.Previous())
+		host.WriteCommandState(w, r, "previous", room, displayName, room.Playback.Previous())
 	case "seek":
-		s.writeCommandState(w, r, "seek", room, displayName, room.Playback.SeekTo(req.PositionMS))
+		host.WriteCommandState(w, r, "seek", room, displayName, room.Playback.SeekTo(req.PositionMS))
 	case "skip":
 		before := room.Playback.Snapshot()
-		if err := s.prepareAutoDJ(r.Context(), room); err != nil {
+		if err := PrepareAutoDJ(r.Context(), room, host); err != nil {
 			httpapi.WriteError(w, err)
 			return
 		}
 		state := room.Playback.Skip()
-		s.replenishAutoDJ(r.Context(), room)
+		ReplenishAutoDJ(r.Context(), room, host)
 		if before.Current.DedupeKey != "" {
-			state = s.recordRoomAction(r, room, displayName, s.skipActionText(r.Context(), before.Current.DedupeKey, state.Current.DedupeKey))
+			state = recordRoomAction(r, room, displayName, skipActionText(r.Context(), before.Current.DedupeKey, state.Current.DedupeKey, host), host)
 		}
-		s.writeCommandState(w, r, "skip", room, displayName, state)
+		host.WriteCommandState(w, r, "skip", room, displayName, state)
 	case "history_clear":
-		s.writeCommandState(w, r, "history_clear", room, displayName, room.Playback.ClearHistory())
+		host.WriteCommandState(w, r, "history_clear", room, displayName, room.Playback.ClearHistory())
 	}
 
 }
@@ -250,7 +278,7 @@ func queueOrderChanged(before, after []playback.PlaybackItem) bool {
 	return false
 }
 
-func (s *Server) recordRoomAction(r *http.Request, room *rooms.Room, username, text string) playback.PlaybackState {
+func recordRoomAction(r *http.Request, room *rooms.Room, username, text string, host Host) playback.PlaybackState {
 	ip := ""
 	if parsedIP, ok := clientIP(r.RemoteAddr); ok {
 		ip = parsedIP.String()
@@ -262,16 +290,16 @@ func (s *Server) recordRoomAction(r *http.Request, room *rooms.Room, username, t
 	})
 }
 
-func (s *Server) skipActionText(ctx context.Context, previousKey, _ string) string {
-	previousName := s.trackActionName(ctx, previousKey)
+func skipActionText(ctx context.Context, previousKey, _ string, host Host) string {
+	previousName := trackActionName(ctx, previousKey, host)
 	return fmt.Sprintf("Skipped %q.", previousName)
 }
 
-func (s *Server) trackActionName(ctx context.Context, dedupeKey string) string {
-	if dedupeKey == "" || s.Library == nil {
+func trackActionName(ctx context.Context, dedupeKey string, host Host) string {
+	if dedupeKey == "" || host.LibraryStore() == nil {
 		return "Unavailable track"
 	}
-	track, err := s.Library.ResolveDedupeKey(ctx, dedupeKey)
+	track, err := host.LibraryStore().ResolveDedupeKey(ctx, dedupeKey)
 	if err != nil {
 		return "Unavailable track"
 	}
@@ -286,7 +314,7 @@ func trackActionTitle(track musiclib.Track) string {
 	return title
 }
 
-func permissionForAction(action string) (rooms.RoomPermission, bool) {
+func PermissionForAction(action string) (rooms.RoomPermission, bool) {
 	switch action {
 	case "queue_add":
 		return rooms.PermissionQueueAdd, true
@@ -301,13 +329,13 @@ func permissionForAction(action string) (rooms.RoomPermission, bool) {
 	}
 }
 
-func (s *Server) prepareAutoDJ(ctx context.Context, room *rooms.Room) error {
+func PrepareAutoDJ(ctx context.Context, room *rooms.Room, host Host) error {
 	config, candidate := room.Playback.AutoDJConfiguration()
 	if !config.Enabled {
 		return nil
 	}
 	if candidate != "" {
-		if _, err := s.Library.ResolveDedupeKey(ctx, candidate); err == nil {
+		if _, err := host.LibraryStore().ResolveDedupeKey(ctx, candidate); err == nil {
 			return nil
 		} else if !errors.Is(err, musiclib.ErrTrackNotFound) {
 			return err
@@ -316,7 +344,7 @@ func (s *Server) prepareAutoDJ(ctx context.Context, room *rooms.Room) error {
 			return nil
 		}
 	}
-	_, err := s.prepareAutoDJCandidate(ctx, room, config.Source)
+	_, err := prepareAutoDJCandidate(ctx, room, config.Source, host)
 	if errors.Is(err, musiclib.ErrTrackNotFound) {
 		room.Playback.ConfigureAutoDJ(false, "", nil)
 		return nil
@@ -330,12 +358,12 @@ func (s *Server) prepareAutoDJ(ctx context.Context, room *rooms.Room) error {
 	return nil
 }
 
-func (s *Server) replenishAutoDJ(ctx context.Context, room *rooms.Room) {
+func ReplenishAutoDJ(ctx context.Context, room *rooms.Room, host Host) {
 	config, candidate := room.Playback.AutoDJConfiguration()
 	if !config.Enabled || candidate != "" {
 		return
 	}
-	_, err := s.prepareAutoDJCandidate(ctx, room, config.Source)
+	_, err := prepareAutoDJCandidate(ctx, room, config.Source, host)
 	if err != nil {
 		if errors.Is(err, errAutoDJConfigurationChanged) {
 			return
@@ -348,8 +376,8 @@ func (s *Server) replenishAutoDJ(ctx context.Context, room *rooms.Room) {
 	}
 }
 
-func (s *Server) newAutoDJCycle(ctx context.Context, source playback.AutoDJSource) (string, []int64, error) {
-	entries, err := s.autoDJEntries(ctx, source)
+func newAutoDJCycle(ctx context.Context, source playback.AutoDJSource, host Host) (string, []int64, error) {
+	entries, err := autoDJEntries(ctx, source, host)
 	if err != nil {
 		return "", nil, err
 	}
@@ -357,21 +385,21 @@ func (s *Server) newAutoDJCycle(ctx context.Context, source playback.AutoDJSourc
 		return "", nil, musiclib.ErrTrackNotFound
 	}
 	rand.Shuffle(len(entries), func(i, j int) { entries[i], entries[j] = entries[j], entries[i] })
-	return s.resolveAutoDJEntries(ctx, source, entries)
+	return resolveAutoDJEntries(ctx, source, entries, host)
 }
 
-func (s *Server) autoDJEntries(ctx context.Context, source playback.AutoDJSource) ([]int64, error) {
+func autoDJEntries(ctx context.Context, source playback.AutoDJSource, host Host) ([]int64, error) {
 	if source.Type == playback.AutoDJSourcePlaylist {
-		return s.Library.PlaylistShuffleItemIDs(ctx, source.PlaylistID)
+		return host.LibraryStore().PlaylistShuffleItemIDs(ctx, source.PlaylistID)
 	}
-	return s.Library.ShuffleTrackIDs(ctx)
+	return host.LibraryStore().ShuffleTrackIDs(ctx)
 }
 
-func (s *Server) nextAutoDJCandidate(ctx context.Context, room *rooms.Room, source playback.AutoDJSource) (string, error) {
+func nextAutoDJCandidate(ctx context.Context, room *rooms.Room, source playback.AutoDJSource, host Host) (string, error) {
 	for {
 		entry, ok := room.Playback.TakeAutoDJEntry(source)
 		if ok {
-			track, err := s.resolveAutoDJEntry(ctx, source, entry)
+			track, err := resolveAutoDJEntry(ctx, source, entry, host)
 			if errors.Is(err, musiclib.ErrTrackNotFound) {
 				continue
 			}
@@ -380,7 +408,7 @@ func (s *Server) nextAutoDJCandidate(ctx context.Context, room *rooms.Room, sour
 			}
 			return track.DedupeKey, nil
 		}
-		entries, err := s.autoDJEntries(ctx, source)
+		entries, err := autoDJEntries(ctx, source, host)
 		if err != nil {
 			return "", err
 		}
@@ -398,11 +426,11 @@ func (s *Server) nextAutoDJCandidate(ctx context.Context, room *rooms.Room, sour
 	}
 }
 
-func (s *Server) prepareAutoDJCandidate(ctx context.Context, room *rooms.Room, source playback.AutoDJSource) (string, error) {
+func prepareAutoDJCandidate(ctx context.Context, room *rooms.Room, source playback.AutoDJSource, host Host) (string, error) {
 	if !room.Playback.BeginAutoDJCandidate(source) {
 		return "", errAutoDJConfigurationChanged
 	}
-	candidate, err := s.nextAutoDJCandidate(ctx, room, source)
+	candidate, err := nextAutoDJCandidate(ctx, room, source, host)
 	if err != nil {
 		room.Playback.CompleteAutoDJCandidate(source, "")
 		return "", err
@@ -413,12 +441,12 @@ func (s *Server) prepareAutoDJCandidate(ctx context.Context, room *rooms.Room, s
 	return candidate, nil
 }
 
-func (s *Server) resolveAutoDJEntries(ctx context.Context, source playback.AutoDJSource, entries []int64) (string, []int64, error) {
+func resolveAutoDJEntries(ctx context.Context, source playback.AutoDJSource, entries []int64, host Host) (string, []int64, error) {
 	for len(entries) > 0 {
 		last := len(entries) - 1
 		entry := entries[last]
 		entries = entries[:last]
-		track, err := s.resolveAutoDJEntry(ctx, source, entry)
+		track, err := resolveAutoDJEntry(ctx, source, entry, host)
 		if errors.Is(err, musiclib.ErrTrackNotFound) {
 			continue
 		}
@@ -430,14 +458,14 @@ func (s *Server) resolveAutoDJEntries(ctx context.Context, source playback.AutoD
 	return "", nil, musiclib.ErrTrackNotFound
 }
 
-func (s *Server) resolveAutoDJEntry(ctx context.Context, source playback.AutoDJSource, entry int64) (musiclib.Track, error) {
+func resolveAutoDJEntry(ctx context.Context, source playback.AutoDJSource, entry int64, host Host) (musiclib.Track, error) {
 	if source.Type == playback.AutoDJSourcePlaylist {
-		return s.Library.PlaylistItemTrack(ctx, source.PlaylistID, entry)
+		return host.LibraryStore().PlaylistItemTrack(ctx, source.PlaylistID, entry)
 	}
-	return s.Library.GetCached(ctx, entry)
+	return host.LibraryStore().GetCached(ctx, entry)
 }
 
-func (s *Server) resolveAutoDJSource(ctx context.Context, source playback.AutoDJSource) (playback.AutoDJSource, error) {
+func resolveAutoDJSource(ctx context.Context, source playback.AutoDJSource, host Host) (playback.AutoDJSource, error) {
 	switch source.Type {
 	case playback.AutoDJSourceLibrary:
 		return playback.DefaultAutoDJSource(), nil
@@ -445,7 +473,7 @@ func (s *Server) resolveAutoDJSource(ctx context.Context, source playback.AutoDJ
 		if source.PlaylistID <= 0 {
 			return playback.AutoDJSource{}, errors.New("playlist_id is required for playlist shuffle")
 		}
-		playlist, err := s.Library.GetPlaylistMetadata(ctx, source.PlaylistID)
+		playlist, err := host.LibraryStore().GetPlaylistMetadata(ctx, source.PlaylistID)
 		if err != nil {
 			return playback.AutoDJSource{}, err
 		}
