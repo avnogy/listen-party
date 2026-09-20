@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -251,65 +250,6 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		"track_count": count,
 		"scan":        s.Library.ScanStatus(),
 	})
-}
-
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	s.configMu.RLock()
-	cfg := s.Config
-	s.configMu.RUnlock()
-	writeJSON(w, cfg)
-}
-
-func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
-	var cfg Config
-	if !readJSON(w, r, &cfg) {
-		return
-	}
-	s.configUpdateMu.Lock()
-	defer s.configUpdateMu.Unlock()
-	s.configMu.RLock()
-	old := s.Config
-	path := s.ConfigPath
-	s.configMu.RUnlock()
-	if cfg.Revision != old.Revision {
-		http.Error(w, "configuration changed; reload before saving", http.StatusConflict)
-		return
-	}
-	cfg.Revision = old.Revision + 1
-
-	if err := cfg.ApplyDefaultsForRoot(filepath.Dir(path)); err != nil {
-		slog.Warn("reject config update", "remote", r.RemoteAddr, "error", err)
-		writeError(w, err)
-		return
-	}
-
-	if err := SaveConfig(path, cfg); err != nil {
-		slog.Warn("save config failed", "remote", r.RemoteAddr, "path", path, "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	s.Library.UpdateScanConfig(cfg.MusicDirs, cfg.ScanWorkers)
-	for _, removedID := range removedRoomIDs(old.Rooms, cfg.Rooms) {
-		if err := s.Library.DeleteRoomPlaybackSnapshot(r.Context(), removedID); err != nil {
-			slog.Warn("delete removed room playback state", "room", removedID, "error", err)
-		}
-	}
-	s.Rooms.Update(cfg.Rooms)
-
-	s.configMu.Lock()
-	s.Config = cfg
-	s.configMu.Unlock()
-
-	slog.Info("config updated",
-		"remote", r.RemoteAddr,
-		"path", path,
-		"addr_changed", cfg.Addr != old.Addr,
-		"auth_changed", cfg.Auth.PocketBase != old.Auth.PocketBase,
-		"music_dirs", len(cfg.MusicDirs),
-		"scan_workers", cfg.ScanWorkers,
-	)
-	writeJSON(w, cfg)
 }
 
 func (s *Server) handleRoomAdmin(w http.ResponseWriter, r *http.Request) {
