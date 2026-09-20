@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"listen-party/backend/auth"
+	appauth "listen-party/backend/auth"
 	"listen-party/backend/config"
 	httpapi "listen-party/backend/http"
-	appauth "listen-party/backend/internal/auth"
 	"listen-party/backend/rooms"
 )
 

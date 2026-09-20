@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 )
 
 type UserInfo = appauth.UserInfo

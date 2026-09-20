@@ -11,7 +11,7 @@ import (
 	"listen-party/backend/app/playlists"
 	"listen-party/backend/app/roomadmin"
 	"listen-party/backend/app/session"
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 )
 
 func (s *Server) Handler() http.Handler {

@@ -5,8 +5,8 @@ import (
 
 	"listen-party/backend/app/media"
 	"listen-party/backend/auth"
+	appauth "listen-party/backend/auth"
 	httpapi "listen-party/backend/http"
-	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/rooms"
 )

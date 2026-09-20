@@ -3,7 +3,7 @@ package rooms
 import (
 	"sync"
 
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 	"listen-party/backend/playback"
 )
 

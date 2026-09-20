@@ -3,7 +3,7 @@ package rooms
 import (
 	"slices"
 
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 )
 
 func UserHasRoomPermission(user appauth.UserInfo, room Room, permission RoomPermission) bool {

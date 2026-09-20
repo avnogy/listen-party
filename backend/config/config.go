@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 	domainrooms "listen-party/backend/rooms"
 )
 

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"listen-party/backend/config"
-	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
+	appauth "listen-party/backend/internal/pocketbase"
 	appLogging "listen-party/backend/logging"
 	"listen-party/backend/network"
 	"listen-party/backend/rooms"

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	. "listen-party/backend/internal/auth"
+	. "listen-party/backend/auth"
 )
 
 func TestRoomManagerPreservesPlaybackForUnchangedRooms(t *testing.T) {

@@ -1,4 +1,4 @@
-package auth
+package pocketbase
 
 import (
 	"crypto/rand"
@@ -9,11 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	appauth "listen-party/backend/auth"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -23,11 +24,7 @@ import (
 	"github.com/pocketbase/pocketbase/ui"
 )
 
-type Role string
-
 const (
-	RoleAdmin Role = "admin"
-
 	defaultAdminEmail    = "admin@listen-party.local"
 	defaultAdminPassword = "admin"
 	sessionCookieName    = "listen_party_auth"
@@ -36,27 +33,11 @@ const (
 	usersCollection      = "users"
 )
 
-type UserInfo struct {
-	ID          string   `json:"id"`
-	Username    string   `json:"username"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Role        Role     `json:"role,omitempty"`
-	Groups      []string `json:"groups"`
-	SessionKey  string   `json:"-"`
-}
+type Role = appauth.Role
+type UserInfo = appauth.UserInfo
+type UserSummary = appauth.UserSummary
 
-type UserSummary struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name,omitempty"`
-}
-
-func (u UserInfo) Display() string {
-	if name := strings.TrimSpace(u.DisplayName); name != "" {
-		return name
-	}
-	return strings.TrimSpace(u.Username)
-}
+const RoleAdmin = appauth.RoleAdmin
 
 var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 <html lang="en">
@@ -147,19 +128,8 @@ if (location.pathname === "/login/oauth/callback") {
 </body>
 </html>`))
 
-type Config struct {
-	DataDir             string     `json:"-"`
-	BootstrapAdminEmail string     `json:"-"`
-	Keycloak            OIDCConfig `json:"keycloak"`
-}
-
-type OIDCConfig struct {
-	Enabled      bool   `json:"enabled"`
-	IssuerURL    string `json:"issuer_url"`
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	DisplayName  string `json:"display_name"`
-}
+type Config = appauth.Config
+type OIDCConfig = appauth.OIDCConfig
 
 type Service struct {
 	app     *pocketbase.PocketBase
@@ -315,21 +285,6 @@ func bindSessionCookie(app core.App) {
 			return e.Next()
 		},
 	})
-}
-
-func DataDir(configDir string) string {
-	return filepath.Join(configDir, "auth")
-}
-
-func DefaultBootstrapAdminEmail() string {
-	return defaultAdminEmail
-}
-
-func DefaultConfig(configDir string) Config {
-	return Config{
-		DataDir:             DataDir(configDir),
-		BootstrapAdminEmail: defaultAdminEmail,
-	}
 }
 
 func configureOIDC(app core.App, cfg OIDCConfig) error {

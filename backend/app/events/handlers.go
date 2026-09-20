@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	appauth "listen-party/backend/internal/auth"
+	appauth "listen-party/backend/auth"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"
 )

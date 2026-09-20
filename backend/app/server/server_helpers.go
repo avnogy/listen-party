@@ -11,8 +11,8 @@ import (
 
 	"listen-party/backend/app/view"
 	"listen-party/backend/auth"
+	appauth "listen-party/backend/auth"
 	"listen-party/backend/config"
-	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
 	"listen-party/backend/rooms"

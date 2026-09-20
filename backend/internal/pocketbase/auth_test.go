@@ -1,4 +1,4 @@
-package auth
+package pocketbase
 
 import (
 	"encoding/json"
