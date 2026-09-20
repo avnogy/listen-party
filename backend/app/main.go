@@ -15,12 +15,13 @@ import (
 	"listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
+	appLogging "listen-party/backend/logging"
 	"listen-party/backend/rooms"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	logFile, logPath, err := setupApplicationLogging(os.Stdout)
+	logFile, logPath, err := appLogging.SetupApplicationLogging(os.Stdout)
 	if err != nil {
 		slog.Warn("file logging unavailable", "error", err)
 	} else {

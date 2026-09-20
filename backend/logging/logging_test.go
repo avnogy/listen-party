@@ -1,4 +1,4 @@
-package main
+package logging
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ func TestApplicationLoggingWritesToStdoutAndFile(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root := t.TempDir()
-	file, path, err := setupApplicationLoggingIn(&stdout, root)
+	file, path, err := SetupApplicationLoggingIn(&stdout, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestApplicationLoggingWritesToStdoutAndFile(t *testing.T) {
 		}
 	}
 
-	wantPath := filepath.Join(root, "listen-party", "logs", applicationLogName)
+	wantPath := filepath.Join(root, "listen-party", "logs", ApplicationLogName)
 	if path != wantPath {
 		t.Fatalf("log path = %q, want %q", path, wantPath)
 	}
@@ -53,7 +53,7 @@ func TestApplicationLoggingAppendsToExistingFile(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(original) })
 
 	root := t.TempDir()
-	path := filepath.Join(root, "listen-party", "logs", applicationLogName)
+	path := filepath.Join(root, "listen-party", "logs", ApplicationLogName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestApplicationLoggingAppendsToExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file, _, err := setupApplicationLoggingIn(&bytes.Buffer{}, root)
+	file, _, err := SetupApplicationLoggingIn(&bytes.Buffer{}, root)
 	if err != nil {
 		t.Fatal(err)
 	}
