@@ -71,7 +71,7 @@ function mediaURL(track, suffix = "") {
   if (!track || !track.id) {
     return "";
   }
-  return `/media/${track.id}${suffix}?v=${encodeURIComponent(track.dedupe_key || "")}`;
+  return `/media/${track.id}${suffix}?v=${encodeURIComponent(`${track.size}:${track.mod_time}`)}`;
 }
 
 function loadMedia(track) {
@@ -105,7 +105,7 @@ function samePlaybackTimeline(a, b) {
   return Boolean(
     a &&
     b &&
-    a.current?.dedupe_key === b.current?.dedupe_key &&
+    a.current?.content_key === b.current?.content_key &&
     a.started_at === b.started_at &&
     a.paused === b.paused &&
     a.position_at_pause_ms === b.position_at_pause_ms,

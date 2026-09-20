@@ -185,9 +185,9 @@ async function loadPlaylistDetail(id) {
 }
 
 function renderPlaylistItem(playlist, item) {
-  const dedupeKey = item.dedupe_key || "";
+  const contentKey = item.content_key || "";
   const track = {
-    dedupe_key: dedupeKey,
+    content_key: contentKey,
     title: item.title || "Unknown track",
     artist: item.artist || "",
     album: item.album || "",
@@ -205,9 +205,9 @@ function renderPlaylistItem(playlist, item) {
   }
   return trackUi.trackRow(
     track,
-    trackUi.standardTrackCommands(dedupeKey),
+    trackUi.standardTrackCommands(contentKey),
     "",
-    dedupeKey,
+    contentKey,
     extraButtons,
   );
 }

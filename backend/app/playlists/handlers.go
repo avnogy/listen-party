@@ -100,16 +100,16 @@ func HandlePlaylistAddItem(w http.ResponseWriter, r *http.Request, host Host) {
 		return
 	}
 	var req struct {
-		DedupeKey string `json:"dedupe_key"`
+		ContentKey string `json:"content_key"`
 	}
 	if !httpapi.ReadJSON(w, r, &req) {
 		return
 	}
-	if req.DedupeKey == "" {
-		http.Error(w, "dedupe_key is required", http.StatusBadRequest)
+	if req.ContentKey == "" {
+		http.Error(w, "content_key is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := host.LibraryStore().AddPlaylistTrack(r.Context(), id, req.DedupeKey); err != nil {
+	if _, err := host.LibraryStore().AddPlaylistTrack(r.Context(), id, req.ContentKey); err != nil {
 		httpapi.WriteError(w, err)
 		return
 	}

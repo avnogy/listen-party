@@ -19,14 +19,14 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.R
 		return state
 	}
 	ctx = context.WithoutCancel(ctx)
-	for state.Current.DedupeKey != "" && !state.Paused {
-		if room.Playback.EndTimerMatches(state.Current.DedupeKey, state.StartedAt) {
+	for state.Current.ContentKey != "" && !state.Paused {
+		if room.Playback.EndTimerMatches(state.Current.ContentKey, state.StartedAt) {
 			return state
 		}
-		track, err := s.Library.ResolveDedupeKey(ctx, state.Current.DedupeKey)
+		track, err := s.Library.ResolveContentKey(ctx, state.Current.ContentKey)
 		if err == nil && track.DurationMS <= 0 {
 			<-s.Library.EnsureDuration(track.ID)
-			track, err = s.Library.ResolveDedupeKey(ctx, state.Current.DedupeKey)
+			track, err = s.Library.ResolveContentKey(ctx, state.Current.ContentKey)
 		}
 		unavailable := err == nil && track.DurationMS <= 0
 		if err == nil && !unavailable {
@@ -39,24 +39,24 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.R
 		if err == nil && !unavailable {
 			remaining := time.Duration(track.DurationMS)*time.Millisecond - time.Since(state.StartedAt)
 			if remaining > 0 {
-				key, startedAt := state.Current.DedupeKey, state.StartedAt
+				key, startedAt := state.Current.ContentKey, state.StartedAt
 				room.Playback.ScheduleEnd(remaining, key, startedAt, func() {
 					s.advanceScheduledPlayback(room.ID, key, startedAt)
 				})
 				return state
 			}
 		} else if err != nil && !errors.Is(err, musiclib.ErrTrackNotFound) {
-			slog.Warn("resolve playback timer media", "room", room.ID, "dedupe_key", state.Current.DedupeKey, "error", err)
+			slog.Warn("resolve playback timer media", "room", room.ID, "content_key", state.Current.ContentKey, "error", err)
 			room.Playback.CancelEndTimer()
 			return state
 		}
 
-		key := state.Current.DedupeKey
+		key := state.Current.ContentKey
 		if err := commands.PrepareAutoDJ(ctx, room, s); err != nil {
 			slog.Warn("prepare auto-dj while advancing playback", "room", room.ID, "error", err)
 		}
 		if unavailable || err != nil {
-			slog.Warn("discarding unavailable playback media", "room", room.ID, "dedupe_key", key)
+			slog.Warn("discarding unavailable playback media", "room", room.ID, "content_key", key)
 			var discarded bool
 			state, discarded = room.Playback.Discard(key)
 			if discarded {
@@ -71,7 +71,7 @@ func (s *Server) stabilizeAndSchedulePlayback(ctx context.Context, room *rooms.R
 	return state
 }
 
-func (s *Server) advanceScheduledPlayback(roomID, dedupeKey string, startedAt time.Time) {
+func (s *Server) advanceScheduledPlayback(roomID, contentKey string, startedAt time.Time) {
 	room, ok := s.Rooms.Get(roomID)
 	if !ok {
 		return
@@ -79,7 +79,7 @@ func (s *Server) advanceScheduledPlayback(roomID, dedupeKey string, startedAt ti
 	if err := commands.PrepareAutoDJ(context.Background(), room, s); err != nil {
 		slog.Warn("prepare auto-dj at playback end", "room", room.ID, "error", err)
 	}
-	state, advanced := room.Playback.EndScheduled(dedupeKey, startedAt)
+	state, advanced := room.Playback.EndScheduled(contentKey, startedAt)
 	if !advanced {
 		return
 	}

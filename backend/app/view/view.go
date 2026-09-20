@@ -32,14 +32,14 @@ type ViewItem struct {
 
 func Build(ctx context.Context, state playback.PlaybackState, host Host) (ViewState, error) {
 	keys := make([]string, 0, len(state.Queue)+len(state.History)+1)
-	if state.Current.DedupeKey != "" {
-		keys = append(keys, state.Current.DedupeKey)
+	if state.Current.ContentKey != "" {
+		keys = append(keys, state.Current.ContentKey)
 	}
 	for _, item := range state.Queue {
-		keys = append(keys, item.DedupeKey)
+		keys = append(keys, item.ContentKey)
 	}
 	for _, item := range state.History {
-		keys = append(keys, item.DedupeKey)
+		keys = append(keys, item.ContentKey)
 	}
 	tracks, err := host.CachedViewTracks(ctx, state, keys)
 	if err != nil {
@@ -48,22 +48,22 @@ func Build(ctx context.Context, state playback.PlaybackState, host Host) (ViewSt
 	view := ViewState{PlaybackState: state}
 	view.Queue = make([]ViewItem, 0, len(state.Queue))
 	view.History = make([]ViewItem, 0, len(state.History))
-	if state.Current.DedupeKey != "" {
+	if state.Current.ContentKey != "" {
 		view.Current = &ViewItem{PlaybackItem: state.Current}
-		if track, ok := tracks[state.Current.DedupeKey]; ok {
+		if track, ok := tracks[state.Current.ContentKey]; ok {
 			view.Current.Track = &track
 		}
 	}
 	for _, item := range state.Queue {
 		viewItem := ViewItem{PlaybackItem: item}
-		if track, ok := tracks[item.DedupeKey]; ok {
+		if track, ok := tracks[item.ContentKey]; ok {
 			viewItem.Track = &track
 		}
 		view.Queue = append(view.Queue, viewItem)
 	}
 	for _, item := range state.History {
 		viewItem := ViewItem{PlaybackItem: item}
-		if track, ok := tracks[item.DedupeKey]; ok {
+		if track, ok := tracks[item.ContentKey]; ok {
 			viewItem.Track = &track
 		}
 		view.History = append(view.History, viewItem)

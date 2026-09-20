@@ -22,7 +22,7 @@ var (
 
 type PlaybackItem struct {
 	ID          int64     `json:"id,omitempty"`
-	DedupeKey   string    `json:"dedupe_key"`
+	ContentKey  string    `json:"content_key"`
 	At          time.Time `json:"at"`
 	RequestedBy string    `json:"requested_by"`
 	Source      string    `json:"source,omitempty"`
@@ -97,7 +97,7 @@ type PersistedPlayback struct {
 }
 
 type PersistedQueueItem struct {
-	DedupeKey   string `json:"dedupe_key"`
+	ContentKey  string `json:"content_key"`
 	RequestedBy string `json:"requested_by"`
 	Source      string `json:"source"`
 }
@@ -120,7 +120,7 @@ type Playback struct {
 	history            []PlaybackItem
 	autoDJ             AutoDJState
 	autoDJNext         string
-	autoDJEntries      []int64
+	autoDJEntries      []string
 	autoDJPreparing    bool
 	roomAudio          RoomAudio
 	actions            []RoomAction
@@ -162,14 +162,14 @@ func newPlaybackGeneration() string {
 	return hex.EncodeToString(value[:])
 }
 
-func (p *Playback) Add(dedupeKey string, requestedBy string) (PlaybackState, error) {
+func (p *Playback) Add(contentKey string, requestedBy string) (PlaybackState, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.queue) >= maxQueueItems {
 		return p.stateLocked(), ErrQueueFull
 	}
 	p.nextID++
-	p.queue = append(p.queue, PlaybackItem{ID: p.nextID, DedupeKey: dedupeKey, At: time.Now(), RequestedBy: requestedBy, Source: "user"})
+	p.queue = append(p.queue, PlaybackItem{ID: p.nextID, ContentKey: contentKey, At: time.Now(), RequestedBy: requestedBy, Source: "user"})
 	p.bumpLocked()
 	return p.stateLocked(), nil
 }
@@ -191,16 +191,16 @@ func (p *Playback) Play() (PlaybackState, error) {
 	return p.stateLocked(), nil
 }
 
-func (p *Playback) PlayNow(dedupeKey string, requestedBy string) PlaybackState {
+func (p *Playback) PlayNow(contentKey string, requestedBy string) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.removeQueuedTrackLocked(dedupeKey)
-	if p.autoDJNext == dedupeKey {
+	p.removeQueuedTrackLocked(contentKey)
+	if p.autoDJNext == contentKey {
 		p.autoDJNext = ""
 	}
 	p.recordCurrentLocked()
-	p.current = dedupeKey
+	p.current = contentKey
 	p.currentRequestedBy = requestedBy
 	p.currentSource = "user"
 	p.started = time.Now()
@@ -260,14 +260,14 @@ func (p *Playback) Previous() PlaybackState {
 	}
 	item := p.history[0]
 	p.history = p.history[1:]
-	if p.autoDJNext == item.DedupeKey {
+	if p.autoDJNext == item.ContentKey {
 		p.autoDJNext = ""
 	}
 	if p.current != "" {
 		p.nextID++
-		p.queue = append([]PlaybackItem{{ID: p.nextID, DedupeKey: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy, Source: p.currentSource}}, p.queue...)
+		p.queue = append([]PlaybackItem{{ID: p.nextID, ContentKey: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy, Source: p.currentSource}}, p.queue...)
 	}
-	p.current = item.DedupeKey
+	p.current = item.ContentKey
 	p.currentRequestedBy = item.RequestedBy
 	p.currentSource = item.Source
 	p.started = time.Now()
@@ -277,30 +277,30 @@ func (p *Playback) Previous() PlaybackState {
 	return p.stateLocked()
 }
 
-func (p *Playback) Ended(dedupeKey string) PlaybackState {
+func (p *Playback) Ended(contentKey string) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.current != "" && p.current == dedupeKey {
+	if p.current != "" && p.current == contentKey {
 		p.startNextLocked()
 	}
 	return p.stateLocked()
 }
 
 // Discard removes an unavailable track without placing it in history.
-func (p *Playback) Discard(dedupeKey string) (PlaybackState, bool) {
+func (p *Playback) Discard(contentKey string) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.current != dedupeKey {
+	if p.current != contentKey {
 		return p.stateLocked(), false
 	}
 	if p.endTimer != nil {
 		p.endTimer.Stop()
 	}
 	p.endTimer = nil
-	p.queue = slices.DeleteFunc(p.queue, func(item PlaybackItem) bool { return item.DedupeKey == dedupeKey })
-	if p.autoDJNext == dedupeKey {
+	p.queue = slices.DeleteFunc(p.queue, func(item PlaybackItem) bool { return item.ContentKey == contentKey })
+	if p.autoDJNext == contentKey {
 		p.autoDJNext = ""
 	}
 	p.current = ""
@@ -308,10 +308,10 @@ func (p *Playback) Discard(dedupeKey string) (PlaybackState, bool) {
 	return p.stateLocked(), true
 }
 
-func (p *Playback) EndScheduled(dedupeKey string, startedAt time.Time) (PlaybackState, bool) {
+func (p *Playback) EndScheduled(contentKey string, startedAt time.Time) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.paused || p.current != dedupeKey || !p.started.Equal(startedAt) {
+	if p.paused || p.current != contentKey || !p.started.Equal(startedAt) {
 		return p.stateLocked(), false
 	}
 	p.endTimer = nil
@@ -320,16 +320,16 @@ func (p *Playback) EndScheduled(dedupeKey string, startedAt time.Time) (Playback
 	return p.stateLocked(), true
 }
 
-func (p *Playback) EndTimerMatches(dedupeKey string, startedAt time.Time) bool {
+func (p *Playback) EndTimerMatches(contentKey string, startedAt time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.endTimer != nil && p.current == dedupeKey && p.started.Equal(startedAt) && p.endTimerStartedAt.Equal(startedAt)
+	return p.endTimer != nil && p.current == contentKey && p.started.Equal(startedAt) && p.endTimerStartedAt.Equal(startedAt)
 }
 
-func (p *Playback) ScheduleEnd(after time.Duration, dedupeKey string, startedAt time.Time, callback func()) {
+func (p *Playback) ScheduleEnd(after time.Duration, contentKey string, startedAt time.Time, callback func()) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.paused || p.current != dedupeKey || !p.started.Equal(startedAt) {
+	if p.paused || p.current != contentKey || !p.started.Equal(startedAt) {
 		return
 	}
 	if p.endTimer != nil {
@@ -464,24 +464,24 @@ func (p *Playback) RestorePersistentState(state PersistedPlayback, revision uint
 	p.pausePos = state.PausePos
 	p.queue = make([]PlaybackItem, 0, len(state.Queue))
 	for _, item := range state.Queue {
-		if item.DedupeKey == "" {
+		if item.ContentKey == "" {
 			continue
 		}
 		p.nextID++
 		p.queue = append(p.queue, PlaybackItem{
 			ID:          p.nextID,
-			DedupeKey:   item.DedupeKey,
+			ContentKey:  item.ContentKey,
 			RequestedBy: item.RequestedBy,
 			Source:      item.Source,
 		})
 	}
 	p.history = make([]PlaybackItem, 0, len(state.History))
 	for _, item := range state.History {
-		if item.DedupeKey == "" {
+		if item.ContentKey == "" {
 			continue
 		}
 		p.history = append(p.history, PlaybackItem{
-			DedupeKey:   item.DedupeKey,
+			ContentKey:  item.ContentKey,
 			RequestedBy: item.RequestedBy,
 			Source:      item.Source,
 		})
@@ -511,7 +511,7 @@ func (p *Playback) AddAction(action RoomAction) PlaybackState {
 	return p.stateLocked()
 }
 
-func (p *Playback) ConfigureAutoDJ(enabled bool, candidate string, entries []int64) PlaybackState {
+func (p *Playback) ConfigureAutoDJ(enabled bool, candidate string, entries []string) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.autoDJ.Enabled = enabled
@@ -527,7 +527,7 @@ func (p *Playback) ConfigureAutoDJ(enabled bool, candidate string, entries []int
 	return p.stateLocked()
 }
 
-func (p *Playback) ConfigureAutoDJForSource(source AutoDJSource, enabled bool, candidate string, entries []int64) (PlaybackState, bool) {
+func (p *Playback) ConfigureAutoDJForSource(source AutoDJSource, enabled bool, candidate string, entries []string) (PlaybackState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.autoDJ.Source != source {
@@ -546,7 +546,7 @@ func (p *Playback) ConfigureAutoDJForSource(source AutoDJSource, enabled bool, c
 	return p.stateLocked(), true
 }
 
-func (p *Playback) ConfigureAutoDJSource(source AutoDJSource, candidate string, entries []int64) PlaybackState {
+func (p *Playback) ConfigureAutoDJSource(source AutoDJSource, candidate string, entries []string) PlaybackState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.autoDJ.Source = source
@@ -602,19 +602,19 @@ func (p *Playback) ClearAutoDJCandidate(source AutoDJSource) bool {
 	return true
 }
 
-func (p *Playback) TakeAutoDJEntry(source AutoDJSource) (int64, bool) {
+func (p *Playback) TakeAutoDJEntry(source AutoDJSource) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.autoDJ.Enabled || p.autoDJ.Source != source || !p.autoDJPreparing || len(p.autoDJEntries) == 0 {
-		return 0, false
+		return "", false
 	}
 	last := len(p.autoDJEntries) - 1
-	id := p.autoDJEntries[last]
+	key := p.autoDJEntries[last]
 	p.autoDJEntries = p.autoDJEntries[:last]
-	return id, true
+	return key, true
 }
 
-func (p *Playback) RefillAutoDJEntries(source AutoDJSource, entries []int64) bool {
+func (p *Playback) RefillAutoDJEntries(source AutoDJSource, entries []string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.autoDJ.Enabled || p.autoDJ.Source != source || !p.autoDJPreparing || len(p.autoDJEntries) != 0 {
@@ -766,11 +766,11 @@ func (p *Playback) startNextLocked() bool {
 	}
 	item := p.queue[0]
 	p.queue = p.queue[1:]
-	if p.autoDJNext == item.DedupeKey {
+	if p.autoDJNext == item.ContentKey {
 		p.autoDJNext = ""
 	}
 	p.recordCurrentLocked()
-	p.current = item.DedupeKey
+	p.current = item.ContentKey
 	p.currentRequestedBy = item.RequestedBy
 	p.currentSource = item.Source
 	p.started = time.Now()
@@ -780,9 +780,9 @@ func (p *Playback) startNextLocked() bool {
 	return true
 }
 
-func (p *Playback) removeQueuedTrackLocked(dedupeKey string) {
+func (p *Playback) removeQueuedTrackLocked(contentKey string) {
 	for i, item := range p.queue {
-		if item.DedupeKey == dedupeKey {
+		if item.ContentKey == contentKey {
 			p.queue = append(p.queue[:i], p.queue[i+1:]...)
 			return
 		}
@@ -793,7 +793,7 @@ func (p *Playback) recordCurrentLocked() {
 	if p.current == "" {
 		return
 	}
-	p.history = append([]PlaybackItem{{DedupeKey: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy, Source: p.currentSource}}, p.history...)
+	p.history = append([]PlaybackItem{{ContentKey: p.current, At: time.Now(), RequestedBy: p.currentRequestedBy, Source: p.currentSource}}, p.history...)
 	if len(p.history) > 15 {
 		p.history = p.history[:15]
 	}
@@ -827,7 +827,7 @@ func (p *Playback) stateLocked() PlaybackState {
 		RoomID:            p.roomID,
 		Generation:        p.generation,
 		Revision:          p.revision,
-		Current:           PlaybackItem{DedupeKey: p.current, At: p.started, RequestedBy: p.currentRequestedBy, Source: p.currentSource},
+		Current:           PlaybackItem{ContentKey: p.current, At: p.started, RequestedBy: p.currentRequestedBy, Source: p.currentSource},
 		StartedAt:         p.started,
 		Paused:            p.paused,
 		PositionAtPauseMS: p.pausePos,
@@ -862,7 +862,7 @@ func persistedQueue(queue []PlaybackItem) []PersistedQueueItem {
 	persisted := make([]PersistedQueueItem, 0, len(queue))
 	for _, item := range queue {
 		persisted = append(persisted, PersistedQueueItem{
-			DedupeKey:   item.DedupeKey,
+			ContentKey:  item.ContentKey,
 			RequestedBy: item.RequestedBy,
 			Source:      item.Source,
 		})

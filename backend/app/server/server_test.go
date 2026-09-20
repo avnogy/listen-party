@@ -70,9 +70,9 @@ func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 	})
 	defer server.Rooms.Close()
 
-	postCommand(t, server, fmt.Sprintf(`{"action":"queue_add","dedupe_key":%q}`, byTitle["Second"].DedupeKey))
-	view := postCommand(t, server, fmt.Sprintf(`{"action":"play_now","dedupe_key":%q}`, byTitle["First"].DedupeKey))
-	if view.Current.DedupeKey != byTitle["Second"].DedupeKey || len(view.History) != 0 || len(view.Actions) == 0 || view.Actions[0].Username != "System" {
+	postCommand(t, server, fmt.Sprintf(`{"action":"queue_add","content_key":%q}`, byTitle["Second"].ContentKey))
+	view := postCommand(t, server, fmt.Sprintf(`{"action":"play_now","content_key":%q}`, byTitle["First"].ContentKey))
+	if view.Current.ContentKey != byTitle["Second"].ContentKey || len(view.History) != 0 || len(view.Actions) == 0 || view.Actions[0].Username != "System" {
 		t.Fatalf("unavailable track recovery = %#v", view)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -80,16 +80,16 @@ func TestServerTimerAdvancesAndPausePreventsStaleAdvance(t *testing.T) {
 	time.Sleep(350 * time.Millisecond)
 	room, _ := server.Rooms.Get("main")
 	state := room.Playback.Snapshot()
-	if !state.Paused || state.Current.DedupeKey != paused.Current.DedupeKey {
+	if !state.Paused || state.Current.ContentKey != paused.Current.ContentKey {
 		t.Fatalf("paused playback advanced: %#v", state)
 	}
 	postCommand(t, server, `{"action":"play"}`)
 	deadline := time.Now().Add(time.Second)
-	for state.Current.DedupeKey == paused.Current.DedupeKey && time.Now().Before(deadline) {
+	for state.Current.ContentKey == paused.Current.ContentKey && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 		state = room.Playback.Snapshot()
 	}
-	if state.Current.DedupeKey == paused.Current.DedupeKey {
+	if state.Current.ContentKey == paused.Current.ContentKey {
 		t.Fatalf("server timer did not advance playback: %#v", state)
 	}
 }
@@ -197,7 +197,7 @@ func TestRoomCommandRequiresItsPermission(t *testing.T) {
 		}}},
 	}).Handler()
 	for _, body := range []string{
-		`{"action":"queue_add","dedupe_key":"track"}`,
+		`{"action":"queue_add","content_key":"track"}`,
 		`{"action":"room_audio","volume":0.4}`,
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(body))
@@ -243,7 +243,7 @@ func TestQueueRejectsUnknownTrack(t *testing.T) {
 	}
 	defer lib.Close()
 	server := queueTestServer(lib).Handler()
-	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"queue_add","dedupe_key":"missing"}`))
+	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(`{"action":"queue_add","content_key":"missing"}`))
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -295,7 +295,7 @@ func TestQueueReorderUsesStableQueueItemIDs(t *testing.T) {
 		t.Fatalf("queue_reorder status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	state = room.Playback.Snapshot()
-	if got := []string{state.Queue[0].DedupeKey, state.Queue[1].DedupeKey, state.Queue[2].DedupeKey}; !slices.Equal(got, []string{"30", "10", "20"}) {
+	if got := []string{state.Queue[0].ContentKey, state.Queue[1].ContentKey, state.Queue[2].ContentKey}; !slices.Equal(got, []string{"30", "10", "20"}) {
 		t.Fatalf("reordered queue = %v, want [30 10 20]", got)
 	}
 }
@@ -304,8 +304,8 @@ func TestRoomActionLogRecordsQueueRemoveReorderAndSkip(t *testing.T) {
 	server, tracks := actionLogTestServer(t)
 	room, _ := server.Rooms.Get("main")
 
-	room.Playback.Add(tracks["First"].DedupeKey, "alice")
-	state, _ := room.Playback.Add(tracks["Second"].DedupeKey, "alice")
+	room.Playback.Add(tracks["First"].ContentKey, "alice")
+	state, _ := room.Playback.Add(tracks["Second"].ContentKey, "alice")
 	removeBody := fmt.Sprintf(`{"action":"queue_remove","queue_item_id":%d}`, state.Queue[1].ID)
 	view := postCommand(t, server, removeBody)
 	if len(view.Actions) != 1 {
@@ -317,9 +317,9 @@ func TestRoomActionLogRecordsQueueRemoveReorderAndSkip(t *testing.T) {
 
 	server, tracks = actionLogTestServer(t)
 	room, _ = server.Rooms.Get("main")
-	room.Playback.Add(tracks["First"].DedupeKey, "alice")
-	room.Playback.Add(tracks["Second"].DedupeKey, "alice")
-	state, _ = room.Playback.Add(tracks["Third"].DedupeKey, "alice")
+	room.Playback.Add(tracks["First"].ContentKey, "alice")
+	room.Playback.Add(tracks["Second"].ContentKey, "alice")
+	state, _ = room.Playback.Add(tracks["Third"].ContentKey, "alice")
 	reorderBody := fmt.Sprintf(`{"action":"queue_reorder","queue_item_id":%d,"before_queue_item_id":%d}`, state.Queue[2].ID, state.Queue[0].ID)
 	view = postCommand(t, server, reorderBody)
 	if action := view.Actions[0]; action.Text != `Moved "Third" before "First" in the queue.` {
@@ -328,8 +328,8 @@ func TestRoomActionLogRecordsQueueRemoveReorderAndSkip(t *testing.T) {
 
 	server, tracks = actionLogTestServer(t)
 	room, _ = server.Rooms.Get("main")
-	room.Playback.PlayNow(tracks["First"].DedupeKey, "alice")
-	room.Playback.Add(tracks["Second"].DedupeKey, "alice")
+	room.Playback.PlayNow(tracks["First"].ContentKey, "alice")
+	room.Playback.Add(tracks["Second"].ContentKey, "alice")
 	view = postCommand(t, server, `{"action":"skip"}`)
 	if action := view.Actions[0]; action.Text != `Skipped "First".` {
 		t.Fatalf("skip action = %#v", action)
@@ -340,28 +340,28 @@ func TestRoomActionLogRecordsPlayNowOnlyWhenReplacingActiveTrack(t *testing.T) {
 	server, tracks := actionLogTestServer(t)
 	room, _ := server.Rooms.Get("main")
 
-	view := postCommand(t, server, fmt.Sprintf(`{"action":"play_now","dedupe_key":%q}`, tracks["First"].DedupeKey))
+	view := postCommand(t, server, fmt.Sprintf(`{"action":"play_now","content_key":%q}`, tracks["First"].ContentKey))
 	if len(view.Actions) != 0 {
 		t.Fatalf("actions after initial play now = %#v", view.Actions)
 	}
 
-	view = postCommand(t, server, fmt.Sprintf(`{"action":"play_now","dedupe_key":%q}`, tracks["Second"].DedupeKey))
+	view = postCommand(t, server, fmt.Sprintf(`{"action":"play_now","content_key":%q}`, tracks["Second"].ContentKey))
 	if len(view.Actions) != 1 {
 		t.Fatalf("actions after replacing active track = %#v", view.Actions)
 	}
 	if action := view.Actions[0]; action.Text != `Played "Second" now, replacing "First".` || action.IP != "192.168.1.44" || action.Username != "alice" {
 		t.Fatalf("play now action = %#v", action)
 	}
-	if state := room.Playback.Snapshot(); state.Current.DedupeKey != tracks["Second"].DedupeKey {
-		t.Fatalf("current track = %q, want Second", state.Current.DedupeKey)
+	if state := room.Playback.Snapshot(); state.Current.ContentKey != tracks["Second"].ContentKey {
+		t.Fatalf("current track = %q, want Second", state.Current.ContentKey)
 	}
 }
 
 func TestRoomActionLogRecordsQueueClearWithoutListingTracks(t *testing.T) {
 	server, tracks := actionLogTestServer(t)
 	room, _ := server.Rooms.Get("main")
-	room.Playback.Add(tracks["First"].DedupeKey, "alice")
-	room.Playback.Add(tracks["Second"].DedupeKey, "alice")
+	room.Playback.Add(tracks["First"].ContentKey, "alice")
+	room.Playback.Add(tracks["Second"].ContentKey, "alice")
 
 	view := postCommand(t, server, `{"action":"queue_clear"}`)
 	if len(view.Actions) != 1 {
@@ -479,7 +479,7 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, track := range tracks {
-		if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, track.DedupeKey); err != nil {
+		if _, err := lib.AddPlaylistTrack(ctx, playlist.ID, track.ContentKey); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -493,7 +493,7 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 		}}},
 	})
 	room, _ := server.Rooms.Get("main")
-	room.Playback.PlayNow(tracks[0].DedupeKey, "alice")
+	room.Playback.PlayNow(tracks[0].ContentKey, "alice")
 
 	req := httptest.NewRequest(http.MethodPost, "/rooms/main/api/command", strings.NewReader(fmt.Sprintf(`{"action":"auto_dj_source","source":{"type":"playlist","playlist_id":%d}}`, playlist.ID)))
 	rec := httptest.NewRecorder()
@@ -525,10 +525,10 @@ func TestAutoDJToggleAndAdvanceUseQueueManagementPermission(t *testing.T) {
 			t.Fatalf("skip status = %d: %s", rec.Code, rec.Body.String())
 		}
 		state := room.Playback.Snapshot()
-		if state.Current.Source != "auto_dj" || seen[state.Current.DedupeKey] {
+		if state.Current.Source != "auto_dj" || seen[state.Current.ContentKey] {
 			t.Fatalf("auto-dj repeated within cycle: %#v", state.Current)
 		}
-		seen[state.Current.DedupeKey] = true
+		seen[state.Current.ContentKey] = true
 	}
 	if _, candidate := room.Playback.AutoDJConfiguration(); candidate == "" {
 		t.Fatal("next auto-dj candidate was not prepared")
@@ -940,7 +940,7 @@ func actionLogTestServer(t *testing.T) (*Server, map[string]musiclib.Track) {
 		byTitle[track.Title] = track
 	}
 	for _, title := range []string{"First", "Second", "Third"} {
-		if byTitle[title].DedupeKey == "" {
+		if byTitle[title].ContentKey == "" {
 			t.Fatalf("missing indexed track %q in %#v", title, byTitle)
 		}
 	}

@@ -57,7 +57,7 @@ function renderQueueItem(item) {
     formatting.playbackRequester(item),
   );
 
-  const actions = trackUi.trackActionGroup([], item.dedupe_key, [
+  const actions = trackUi.trackActionGroup([], item.content_key, [
     trackUi.commandTrashButton("Remove from queue", {
       action: "queue_remove",
       queue_item_id: item.id,

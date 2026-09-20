@@ -81,10 +81,10 @@ func (s *Server) CachedViewTracks(ctx context.Context, state playback.PlaybackSt
 			return cached.tracks, nil
 		}
 		if cached.revision > state.Revision {
-			return s.Library.ListByDedupeKeys(ctx, keys)
+			return s.Library.ListByContentKeys(ctx, keys)
 		}
 	}
-	tracks, err := s.Library.ListByDedupeKeys(ctx, keys)
+	tracks, err := s.Library.ListByContentKeys(ctx, keys)
 	if err != nil {
 		return nil, err
 	}

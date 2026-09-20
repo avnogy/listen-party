@@ -11,8 +11,8 @@ import (
 func TestQueueWaitsForPlayAndSkipAdvances(t *testing.T) {
 	p := NewPlayback("default")
 	state, _ := p.Add("10", "alice")
-	if state.Current.DedupeKey != "" {
-		t.Fatalf("current = %q, want nothing playing", state.Current.DedupeKey)
+	if state.Current.ContentKey != "" {
+		t.Fatalf("current = %q, want nothing playing", state.Current.ContentKey)
 	}
 	if len(state.Queue) != 1 {
 		t.Fatalf("queue length = %d, want 1", len(state.Queue))
@@ -24,8 +24,8 @@ func TestQueueWaitsForPlayAndSkipAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("play: %v", err)
 	}
-	if state.Current.DedupeKey != "10" {
-		t.Fatalf("current after play = %q, want 10", state.Current.DedupeKey)
+	if state.Current.ContentKey != "10" {
+		t.Fatalf("current after play = %q, want 10", state.Current.ContentKey)
 	}
 	if state.Current.RequestedBy != "alice" {
 		t.Fatalf("current requested by = %q, want alice", state.Current.RequestedBy)
@@ -35,8 +35,8 @@ func TestQueueWaitsForPlayAndSkipAdvances(t *testing.T) {
 		t.Fatalf("queue length = %d, want 1", len(state.Queue))
 	}
 	state = p.Skip()
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("current after skip = %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("current after skip = %q, want 20", state.Current.ContentKey)
 	}
 }
 
@@ -48,8 +48,8 @@ func TestSeekUpdatesSharedPosition(t *testing.T) {
 	}
 
 	state := p.SeekTo(30_000)
-	if state.Current.DedupeKey != "10" {
-		t.Fatalf("current = %q, want 10", state.Current.DedupeKey)
+	if state.Current.ContentKey != "10" {
+		t.Fatalf("current = %q, want 10", state.Current.ContentKey)
 	}
 	state = p.Pause()
 	if state.PositionAtPauseMS < 30_000 || state.PositionAtPauseMS > 31_000 {
@@ -108,8 +108,8 @@ func TestQueueRemoveAndClear(t *testing.T) {
 	if len(state.Queue) != 0 {
 		t.Fatalf("queue length after clear = %d, want 0", len(state.Queue))
 	}
-	if state.Current.DedupeKey != "10" {
-		t.Fatalf("current track = %q, want 10", state.Current.DedupeKey)
+	if state.Current.ContentKey != "10" {
+		t.Fatalf("current track = %q, want 10", state.Current.ContentKey)
 	}
 }
 
@@ -140,12 +140,12 @@ func TestEndedOnlyAdvancesMatchingCurrentTrack(t *testing.T) {
 	p.Add("30", "alice")
 
 	state := p.Ended("10")
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("current after ended = %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("current after ended = %q, want 20", state.Current.ContentKey)
 	}
 	state = p.Ended("10")
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("stale ended advanced current to %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("stale ended advanced current to %q, want 20", state.Current.ContentKey)
 	}
 }
 
@@ -157,10 +157,10 @@ func TestPreviousPlaysNewestHistoryAndReturnsCurrentToQueue(t *testing.T) {
 	}
 	p.Add("20", "alice")
 	state := p.Skip()
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("current after skip = %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("current after skip = %q, want 20", state.Current.ContentKey)
 	}
-	if len(state.History) != 1 || state.History[0].DedupeKey != "10" {
+	if len(state.History) != 1 || state.History[0].ContentKey != "10" {
 		t.Fatalf("history = %#v, want track 10", state.History)
 	}
 	if state.History[0].RequestedBy != "alice" || state.Current.RequestedBy != "alice" {
@@ -168,13 +168,13 @@ func TestPreviousPlaysNewestHistoryAndReturnsCurrentToQueue(t *testing.T) {
 	}
 
 	state = p.Previous()
-	if state.Current.DedupeKey != "10" {
-		t.Fatalf("current after previous = %q, want 10", state.Current.DedupeKey)
+	if state.Current.ContentKey != "10" {
+		t.Fatalf("current after previous = %q, want 10", state.Current.ContentKey)
 	}
 	if len(state.History) != 0 {
 		t.Fatalf("history length after previous = %d, want 0", len(state.History))
 	}
-	if len(state.Queue) != 1 || state.Queue[0].DedupeKey != "20" {
+	if len(state.Queue) != 1 || state.Queue[0].ContentKey != "20" {
 		t.Fatalf("queue after previous = %#v, want current track 20 first", state.Queue)
 	}
 	if state.Current.RequestedBy != "alice" || state.Queue[0].RequestedBy != "alice" {
@@ -195,7 +195,7 @@ func TestQueueReorderByQueueItemID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := []string{state.Queue[0].DedupeKey, state.Queue[1].DedupeKey, state.Queue[2].DedupeKey}; !slices.Equal(got, []string{"30", "10", "20"}) {
+	if got := []string{state.Queue[0].ContentKey, state.Queue[1].ContentKey, state.Queue[2].ContentKey}; !slices.Equal(got, []string{"30", "10", "20"}) {
 		t.Fatalf("reordered queue = %v, want [30 10 20]", got)
 	}
 
@@ -203,7 +203,7 @@ func TestQueueReorderByQueueItemID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := []string{state.Queue[0].DedupeKey, state.Queue[1].DedupeKey, state.Queue[2].DedupeKey}; !slices.Equal(got, []string{"30", "20", "10"}) {
+	if got := []string{state.Queue[0].ContentKey, state.Queue[1].ContentKey, state.Queue[2].ContentKey}; !slices.Equal(got, []string{"30", "20", "10"}) {
 		t.Fatalf("queue after move to end = %v, want [30 20 10]", got)
 	}
 
@@ -226,8 +226,8 @@ func TestPlayNowStartsTrackAndRecordsHistory(t *testing.T) {
 	p.Add("20", "alice")
 
 	state := p.PlayNow("20", "bob")
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("current = %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("current = %q, want 20", state.Current.ContentKey)
 	}
 	if state.Current.RequestedBy != "bob" {
 		t.Fatalf("current requested by = %q, want bob", state.Current.RequestedBy)
@@ -235,7 +235,7 @@ func TestPlayNowStartsTrackAndRecordsHistory(t *testing.T) {
 	if len(state.Queue) != 0 {
 		t.Fatalf("queue length = %d, want 0", len(state.Queue))
 	}
-	if len(state.History) != 1 || state.History[0].DedupeKey != "10" {
+	if len(state.History) != 1 || state.History[0].ContentKey != "10" {
 		t.Fatalf("history = %#v, want previous track 10", state.History)
 	}
 	if state.History[0].RequestedBy != "alice" {
@@ -258,8 +258,8 @@ func TestClearHistory(t *testing.T) {
 	if len(state.History) != 0 {
 		t.Fatalf("history length after clear = %d, want 0", len(state.History))
 	}
-	if state.Current.DedupeKey != "20" {
-		t.Fatalf("current after clear = %q, want 20", state.Current.DedupeKey)
+	if state.Current.ContentKey != "20" {
+		t.Fatalf("current after clear = %q, want 20", state.Current.ContentKey)
 	}
 }
 
@@ -292,7 +292,7 @@ func TestSubscriberReceivesLatestState(t *testing.T) {
 		}
 	}
 	state := <-ch
-	if len(state.Queue) != 3 || state.Queue[2].DedupeKey != "three" {
+	if len(state.Queue) != 3 || state.Queue[2].ContentKey != "three" {
 		t.Fatalf("subscriber state = %#v, want latest queue", state)
 	}
 	select {
@@ -415,11 +415,11 @@ func TestAutoDJStartsPreparedTrackOnlyAfterQueueIsExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Current.DedupeKey != "queued" || state.Current.Source != "user" {
+	if state.Current.ContentKey != "queued" || state.Current.Source != "user" {
 		t.Fatalf("first current = %#v, want queued user track", state.Current)
 	}
 	state = p.Skip()
-	if state.Current.DedupeKey != "random" || state.Current.Source != "auto_dj" || state.Current.RequestedBy != "" {
+	if state.Current.ContentKey != "random" || state.Current.Source != "auto_dj" || state.Current.RequestedBy != "" {
 		t.Fatalf("auto-dj current = %#v", state.Current)
 	}
 	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
@@ -429,7 +429,7 @@ func TestAutoDJStartsPreparedTrackOnlyAfterQueueIsExhausted(t *testing.T) {
 
 func TestDisablingAutoDJClearsPreparedTrack(t *testing.T) {
 	p := NewPlayback("main")
-	p.ConfigureAutoDJ(true, "random", []int64{1, 2})
+	p.ConfigureAutoDJ(true, "random", []string{"one", "two"})
 	state := p.ConfigureAutoDJ(false, "", nil)
 	if state.AutoDJ.Enabled {
 		t.Fatal("auto-dj remained enabled")
@@ -459,7 +459,7 @@ func TestPlaylistChangesInvalidateAutoDJCandidates(t *testing.T) {
 	p := NewPlayback("main")
 	source := AutoDJSource{Type: AutoDJSourcePlaylist, PlaylistID: 7, Name: "Evening"}
 	p.ConfigureAutoDJSource(source, "", nil)
-	p.ConfigureAutoDJ(true, "prepared", []int64{1, 2})
+	p.ConfigureAutoDJ(true, "prepared", []string{"one", "two"})
 	p.InvalidateAutoDJPlaylistCandidate(source.PlaylistID)
 	if _, candidate := p.AutoDJConfiguration(); candidate != "" {
 		t.Fatalf("candidate after playlist edit = %q, want empty", candidate)
@@ -476,15 +476,15 @@ func TestPlaylistChangesInvalidateAutoDJCandidates(t *testing.T) {
 func TestAutoDJEntriesAreConsumedFromTheShuffledBag(t *testing.T) {
 	p := NewPlayback("main")
 	source := DefaultAutoDJSource()
-	p.ConfigureAutoDJ(true, "current", []int64{1, 2})
+	p.ConfigureAutoDJ(true, "current", []string{"one", "two"})
 	p.ClearAutoDJCandidate(source)
 	if !p.BeginAutoDJCandidate(source) {
 		t.Fatal("could not begin candidate preparation")
 	}
-	for _, want := range []int64{2, 1} {
+	for _, want := range []string{"two", "one"} {
 		got, ok := p.TakeAutoDJEntry(source)
 		if !ok || got != want {
-			t.Fatalf("entry = %d, %v, want %d, true", got, ok, want)
+			t.Fatalf("entry = %q, %v, want %q, true", got, ok, want)
 		}
 	}
 	if _, ok := p.TakeAutoDJEntry(source); ok {

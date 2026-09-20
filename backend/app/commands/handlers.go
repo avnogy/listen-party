@@ -67,7 +67,7 @@ func Handle(w http.ResponseWriter, r *http.Request, host Host) {
 
 type commandRequest struct {
 	Action            string                `json:"action"`
-	DedupeKey         string                `json:"dedupe_key"`
+	ContentKey        string                `json:"content_key"`
 	QueueItemID       int64                 `json:"queue_item_id"`
 	BeforeQueueItemID int64                 `json:"before_queue_item_id"`
 	PositionMS        int64                 `json:"position_ms"`
@@ -113,7 +113,7 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 				}
 				available = count > 0
 			} else {
-				entries, err := host.LibraryStore().PlaylistShuffleItemIDs(r.Context(), source.PlaylistID)
+				entries, err := host.LibraryStore().PlaylistShuffleContentKeys(r.Context(), source.PlaylistID)
 				if err != nil {
 					httpapi.WriteError(w, err)
 					return
@@ -134,11 +134,11 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 		}
 		host.WriteCommandState(w, r, "auto_dj_source", room, displayName, room.Playback.ConfigureAutoDJSource(source, candidate, entries))
 	case "queue_add":
-		if req.DedupeKey == "" {
-			http.Error(w, "dedupe_key is required", http.StatusBadRequest)
+		if req.ContentKey == "" {
+			http.Error(w, "content_key is required", http.StatusBadRequest)
 			return
 		}
-		track, err := host.LibraryStore().ResolveDedupeKey(r.Context(), req.DedupeKey)
+		track, err := host.LibraryStore().ResolveContentKey(r.Context(), req.ContentKey)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
@@ -146,7 +146,7 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 		if track.DurationMS <= 0 {
 			host.LibraryStore().EnsureDuration(track.ID)
 		}
-		state, err := room.Playback.Add(req.DedupeKey, displayName)
+		state, err := room.Playback.Add(req.ContentKey, displayName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -161,7 +161,7 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 		removed, ok := queueItemByID(before.Queue, req.QueueItemID)
 		state := room.Playback.Remove(req.QueueItemID)
 		if ok && len(state.Queue) != len(before.Queue) {
-			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Removed %q from the queue.", trackActionName(r.Context(), removed.DedupeKey, host)), host)
+			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Removed %q from the queue.", trackActionName(r.Context(), removed.ContentKey, host)), host)
 		}
 		host.WriteCommandState(w, r, "queue_remove", room, displayName, state)
 	case "queue_reorder":
@@ -182,11 +182,11 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 			return
 		}
 		if movedOK && queueOrderChanged(before.Queue, state.Queue) {
-			movedName := trackActionName(r.Context(), moved.DedupeKey, host)
+			movedName := trackActionName(r.Context(), moved.ContentKey, host)
 			if req.BeforeQueueItemID == 0 {
 				state = recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q to the end of the queue.", movedName), host)
 			} else if targetOK {
-				state = recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q before %q in the queue.", movedName, trackActionName(r.Context(), target.DedupeKey, host)), host)
+				state = recordRoomAction(r, room, displayName, fmt.Sprintf("Moved %q before %q in the queue.", movedName, trackActionName(r.Context(), target.ContentKey, host)), host)
 			}
 		}
 		host.WriteCommandState(w, r, "queue_reorder", room, displayName, state)
@@ -206,11 +206,11 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 		}
 		host.WriteCommandState(w, r, "play", room, displayName, state)
 	case "play_now":
-		if req.DedupeKey == "" {
-			http.Error(w, "dedupe_key is required", http.StatusBadRequest)
+		if req.ContentKey == "" {
+			http.Error(w, "content_key is required", http.StatusBadRequest)
 			return
 		}
-		track, err := host.LibraryStore().ResolveDedupeKey(r.Context(), req.DedupeKey)
+		track, err := host.LibraryStore().ResolveContentKey(r.Context(), req.ContentKey)
 		if err != nil {
 			httpapi.WriteError(w, err)
 			return
@@ -219,9 +219,9 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 			host.LibraryStore().EnsureDuration(track.ID)
 		}
 		before := room.Playback.Snapshot()
-		state := room.Playback.PlayNow(req.DedupeKey, displayName)
-		if before.Current.DedupeKey != "" {
-			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Played %q now, replacing %q.", trackActionTitle(track), trackActionName(r.Context(), before.Current.DedupeKey, host)), host)
+		state := room.Playback.PlayNow(req.ContentKey, displayName)
+		if before.Current.ContentKey != "" {
+			state = recordRoomAction(r, room, displayName, fmt.Sprintf("Played %q now, replacing %q.", trackActionTitle(track), trackActionName(r.Context(), before.Current.ContentKey, host)), host)
 		}
 		host.WriteCommandState(w, r, "play_now", room, displayName, state)
 	case "pause":
@@ -244,8 +244,8 @@ func dispatchCommandAction(w http.ResponseWriter, r *http.Request, room *rooms.R
 		}
 		state := room.Playback.Skip()
 		ReplenishAutoDJ(r.Context(), room, host)
-		if before.Current.DedupeKey != "" {
-			state = recordRoomAction(r, room, displayName, skipActionText(r.Context(), before.Current.DedupeKey, state.Current.DedupeKey, host), host)
+		if before.Current.ContentKey != "" {
+			state = recordRoomAction(r, room, displayName, skipActionText(r.Context(), before.Current.ContentKey, state.Current.ContentKey, host), host)
 		}
 		host.WriteCommandState(w, r, "skip", room, displayName, state)
 	case "history_clear":
@@ -295,11 +295,11 @@ func skipActionText(ctx context.Context, previousKey, _ string, host Host) strin
 	return fmt.Sprintf("Skipped %q.", previousName)
 }
 
-func trackActionName(ctx context.Context, dedupeKey string, host Host) string {
-	if dedupeKey == "" || host.LibraryStore() == nil {
+func trackActionName(ctx context.Context, contentKey string, host Host) string {
+	if contentKey == "" || host.LibraryStore() == nil {
 		return "Unavailable track"
 	}
-	track, err := host.LibraryStore().ResolveDedupeKey(ctx, dedupeKey)
+	track, err := host.LibraryStore().ResolveContentKey(ctx, contentKey)
 	if err != nil {
 		return "Unavailable track"
 	}
@@ -335,7 +335,7 @@ func PrepareAutoDJ(ctx context.Context, room *rooms.Room, host Host) error {
 		return nil
 	}
 	if candidate != "" {
-		if _, err := host.LibraryStore().ResolveDedupeKey(ctx, candidate); err == nil {
+		if _, err := host.LibraryStore().ResolveContentKey(ctx, candidate); err == nil {
 			return nil
 		} else if !errors.Is(err, musiclib.ErrTrackNotFound) {
 			return err
@@ -376,7 +376,7 @@ func ReplenishAutoDJ(ctx context.Context, room *rooms.Room, host Host) {
 	}
 }
 
-func newAutoDJCycle(ctx context.Context, source playback.AutoDJSource, host Host) (string, []int64, error) {
+func newAutoDJCycle(ctx context.Context, source playback.AutoDJSource, host Host) (string, []string, error) {
 	entries, err := autoDJEntries(ctx, source, host)
 	if err != nil {
 		return "", nil, err
@@ -385,28 +385,29 @@ func newAutoDJCycle(ctx context.Context, source playback.AutoDJSource, host Host
 		return "", nil, musiclib.ErrTrackNotFound
 	}
 	rand.Shuffle(len(entries), func(i, j int) { entries[i], entries[j] = entries[j], entries[i] })
-	return resolveAutoDJEntries(ctx, source, entries, host)
+	last := len(entries) - 1
+	return entries[last], entries[:last], nil
 }
 
-func autoDJEntries(ctx context.Context, source playback.AutoDJSource, host Host) ([]int64, error) {
+func autoDJEntries(ctx context.Context, source playback.AutoDJSource, host Host) ([]string, error) {
 	if source.Type == playback.AutoDJSourcePlaylist {
-		return host.LibraryStore().PlaylistShuffleItemIDs(ctx, source.PlaylistID)
+		return host.LibraryStore().PlaylistShuffleContentKeys(ctx, source.PlaylistID)
 	}
-	return host.LibraryStore().ShuffleTrackIDs(ctx)
+	return host.LibraryStore().ShuffleContentKeys(ctx)
 }
 
 func nextAutoDJCandidate(ctx context.Context, room *rooms.Room, source playback.AutoDJSource, host Host) (string, error) {
 	for {
-		entry, ok := room.Playback.TakeAutoDJEntry(source)
+		key, ok := room.Playback.TakeAutoDJEntry(source)
 		if ok {
-			track, err := resolveAutoDJEntry(ctx, source, entry, host)
+			track, err := host.LibraryStore().ResolveContentKey(ctx, key)
 			if errors.Is(err, musiclib.ErrTrackNotFound) {
 				continue
 			}
 			if err != nil {
 				return "", err
 			}
-			return track.DedupeKey, nil
+			return track.ContentKey, nil
 		}
 		entries, err := autoDJEntries(ctx, source, host)
 		if err != nil {
@@ -439,30 +440,6 @@ func prepareAutoDJCandidate(ctx context.Context, room *rooms.Room, source playba
 		return "", errAutoDJConfigurationChanged
 	}
 	return candidate, nil
-}
-
-func resolveAutoDJEntries(ctx context.Context, source playback.AutoDJSource, entries []int64, host Host) (string, []int64, error) {
-	for len(entries) > 0 {
-		last := len(entries) - 1
-		entry := entries[last]
-		entries = entries[:last]
-		track, err := resolveAutoDJEntry(ctx, source, entry, host)
-		if errors.Is(err, musiclib.ErrTrackNotFound) {
-			continue
-		}
-		if err != nil {
-			return "", nil, err
-		}
-		return track.DedupeKey, entries, nil
-	}
-	return "", nil, musiclib.ErrTrackNotFound
-}
-
-func resolveAutoDJEntry(ctx context.Context, source playback.AutoDJSource, entry int64, host Host) (musiclib.Track, error) {
-	if source.Type == playback.AutoDJSourcePlaylist {
-		return host.LibraryStore().PlaylistItemTrack(ctx, source.PlaylistID, entry)
-	}
-	return host.LibraryStore().GetCached(ctx, entry)
 }
 
 func resolveAutoDJSource(ctx context.Context, source playback.AutoDJSource, host Host) (playback.AutoDJSource, error) {

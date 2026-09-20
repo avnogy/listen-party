@@ -33,13 +33,10 @@ type Track struct {
 	DurationMS int64     `json:"duration_ms"`
 	Size       int64     `json:"size"`
 	ModTime    time.Time `json:"mod_time"`
-	DedupeKey  string    `json:"dedupe_key"`
-	MatchKey   string    `json:"match_key"`
-	// ContentKey is a metadata identity used only for search dedupe.
-	ContentKey string `json:"-"`
-	Lossless   bool   `json:"lossless"`
-	Bitrate    int    `json:"bitrate"`
-	Available  bool   `json:"available"`
+	ContentKey string    `json:"content_key"`
+	Lossless   bool      `json:"lossless"`
+	Bitrate    int       `json:"bitrate"`
+	Available  bool      `json:"available"`
 }
 
 type Playlist struct {
@@ -55,8 +52,7 @@ type PlaylistItem struct {
 	ID         int64  `json:"id"`
 	PlaylistID int64  `json:"playlist_id"`
 	Position   int    `json:"position"`
-	DedupeKey  string `json:"dedupe_key"`
-	MatchKey   string `json:"match_key"`
+	ContentKey string `json:"content_key"`
 	Title      string `json:"title"`
 	Artist     string `json:"artist"`
 	Album      string `json:"album"`
@@ -159,11 +155,12 @@ const (
 	scanPathBufferSize     = 4096
 	scanMaxWorkers         = 256
 	scanProgressLogEvery   = 5 * time.Second
-	librarySchemaVersion   = "3"
+	librarySchemaVersion   = "4"
+	trackPropertiesVersion = 1
 )
 
-const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, content_key, lossless, bitrate_bps, available`
-const qualifiedTrackSelectColumns = `t.id, t.path, t.title, t.artist, t.album, t.track_no, t.duration_ms, t.size, t.mod_time, t.dedupe_key, t.match_key, t.content_key, t.lossless, t.bitrate_bps, t.available`
+const trackSelectColumns = `id, path, title, artist, album, track_no, duration_ms, size, mod_time, content_key, lossless, bitrate_bps, available`
+const qualifiedTrackSelectColumns = `t.id, t.path, t.title, t.artist, t.album, t.track_no, t.duration_ms, t.size, t.mod_time, t.content_key, t.lossless, t.bitrate_bps, t.available`
 
 func Open(ctx context.Context, path string, dirs []string, workers int) (*Library, error) {
 	db, err := openDB(path)
@@ -229,22 +226,14 @@ CREATE TABLE IF NOT EXISTS library_metadata (
 	if version == librarySchemaVersion {
 		return tx.Commit()
 	}
-	if version == "2" {
+	switch version {
+	case "2", "3":
+		if err := migrateLegacyToV4(ctx, tx, version); err != nil {
+			return err
+		}
+	default:
 		if _, err := tx.ExecContext(ctx, `
-ALTER TABLE tracks ADD COLUMN content_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE tracks ADD COLUMN lossless INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE tracks ADD COLUMN bitrate_bps INTEGER NOT NULL DEFAULT 0;
-UPDATE tracks SET content_key = 'legacy:' || id;`); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE library_metadata SET value = ? WHERE key = 'schema_version'`, librarySchemaVersion); err != nil {
-			return err
-		}
-		return tx.Commit()
-	}
-	if _, err := tx.ExecContext(ctx, `
 DROP TABLE IF EXISTS playlist_items;
-DROP TABLE IF EXISTS room_playback_state;
 DROP TABLE IF EXISTS tracks_fts;
 DROP TABLE IF EXISTS tracks;
 CREATE TABLE IF NOT EXISTS tracks (
@@ -262,6 +251,7 @@ CREATE TABLE IF NOT EXISTS tracks (
 	content_key TEXT NOT NULL DEFAULT '',
 	lossless INTEGER NOT NULL DEFAULT 0,
 	bitrate_bps INTEGER NOT NULL DEFAULT 0,
+	properties_version INTEGER NOT NULL DEFAULT 0,
 	available INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS tracks_available_idx ON tracks(available);
@@ -294,16 +284,23 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 	id INTEGER PRIMARY KEY,
 	playlist_id INTEGER NOT NULL,
 	position INTEGER NOT NULL,
-	dedupe_key TEXT NOT NULL,
-	match_key TEXT NOT NULL,
+	dedupe_key TEXT NOT NULL DEFAULT '',
+	match_key TEXT NOT NULL DEFAULT '',
+	content_key TEXT NOT NULL DEFAULT '',
 	title TEXT NOT NULL,
 	artist TEXT NOT NULL,
 	album TEXT NOT NULL,
 	FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS playlist_items_playlist_idx ON playlist_items(playlist_id, position);
-CREATE INDEX IF NOT EXISTS playlist_items_playlist_dedupe_idx ON playlist_items(playlist_id, dedupe_key);
-CREATE INDEX IF NOT EXISTS tracks_dedupe_idx ON tracks(dedupe_key, available);
+`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS playlist_items_playlist_content_idx ON playlist_items(playlist_id, content_key);
+CREATE INDEX IF NOT EXISTS tracks_content_idx ON tracks(content_key, available);
+DROP TABLE IF EXISTS room_playback_state;
 CREATE TABLE room_playback_state (
 	room_id TEXT PRIMARY KEY,
 	revision INTEGER NOT NULL,
@@ -317,17 +314,79 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, librarySchemaVersion); 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	slog.Warn("reset library content state; retained playlists; reindex required", "schema_version", librarySchemaVersion)
+	if version != "2" && version != "3" {
+		slog.Warn("reset library content state; retained playlists; reindex required", "schema_version", librarySchemaVersion)
+	}
 	return nil
 }
 
+func migrateLegacyToV4(ctx context.Context, tx *sql.Tx, version string) error {
+	if version == "2" {
+		if _, err := tx.ExecContext(ctx, `
+ALTER TABLE tracks ADD COLUMN content_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE tracks ADD COLUMN lossless INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tracks ADD COLUMN bitrate_bps INTEGER NOT NULL DEFAULT 0;`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+ALTER TABLE tracks ADD COLUMN properties_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE playlist_items ADD COLUMN content_key TEXT NOT NULL DEFAULT '';`); err != nil {
+		return err
+	}
+
+	type trackKey struct {
+		id  int64
+		key string
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, title, artist, album, track_no FROM tracks`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var tracks []trackKey
+	for rows.Next() {
+		var track Track
+		if err := rows.Scan(&track.ID, &track.Title, &track.Artist, &track.Album, &track.TrackNo); err != nil {
+			return err
+		}
+		tracks = append(tracks, trackKey{track.ID, contentKey(track.Artist, track.Title, track.Album, track.TrackNo)})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	updateTrack, err := tx.PrepareContext(ctx, `UPDATE tracks SET content_key = ? WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer updateTrack.Close()
+	for _, track := range tracks {
+		if _, err := updateTrack.ExecContext(ctx, track.key, track.id); err != nil {
+			return err
+		}
+	}
+
+	// Track identities must be populated before translating playlist references.
+	_, err = tx.ExecContext(ctx, `
+UPDATE playlist_items SET content_key = COALESCE((
+	SELECT content_key FROM tracks
+	WHERE tracks.dedupe_key = playlist_items.dedupe_key AND tracks.dedupe_key != ''
+	ORDER BY path ASC LIMIT 1
+), '');
+DELETE FROM playlist_items WHERE content_key = '';`)
+	return err
+}
+
 type knownTrack struct {
-	modTime    int64
-	contentKey string
+	modTime           int64
+	propertiesVersion int
 }
 
 func (l *Library) loadKnownTracks(ctx context.Context, roots []string) (map[string]knownTrack, error) {
-	rows, err := l.db.QueryContext(ctx, `SELECT path, mod_time, content_key FROM tracks WHERE available = 1`)
+	rows, err := l.db.QueryContext(ctx, `SELECT path, mod_time, properties_version FROM tracks WHERE available = 1`)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +396,7 @@ func (l *Library) loadKnownTracks(ctx context.Context, roots []string) (map[stri
 	for rows.Next() {
 		var path string
 		var knownFile knownTrack
-		if err := rows.Scan(&path, &knownFile.modTime, &knownFile.contentKey); err != nil {
+		if err := rows.Scan(&path, &knownFile.modTime, &knownFile.propertiesVersion); err != nil {
 			return nil, err
 		}
 		if len(roots) > 0 && !pathInRoots(path, roots) {
@@ -369,8 +428,8 @@ func pathInRoot(path string, root string) bool {
 }
 
 const upsertTrackSQL = `
-INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, content_key, lossless, bitrate_bps, available)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+INSERT INTO tracks(path, title, artist, album, track_no, duration_ms, size, mod_time, dedupe_key, match_key, content_key, lossless, bitrate_bps, properties_version, available)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, 1)
 ON CONFLICT(path) DO UPDATE SET
 	title = excluded.title,
 	artist = excluded.artist,
@@ -379,11 +438,10 @@ ON CONFLICT(path) DO UPDATE SET
 	duration_ms = CASE WHEN tracks.mod_time = excluded.mod_time THEN tracks.duration_ms ELSE excluded.duration_ms END,
 	size = excluded.size,
 	mod_time = excluded.mod_time,
-	dedupe_key = excluded.dedupe_key,
-	match_key = excluded.match_key,
 	content_key = excluded.content_key,
 	lossless = excluded.lossless,
 	bitrate_bps = excluded.bitrate_bps,
+	properties_version = excluded.properties_version,
 	available = 1
 `
 
@@ -413,8 +471,8 @@ func (l *Library) flushTracks(ctx context.Context, tracks []Track) error {
 		if t.Title == "" {
 			t.Title = fallbackTitle(t.path)
 		}
-		setTrackKeys(&t)
-		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix(), t.DedupeKey, t.MatchKey, t.ContentKey, t.Lossless, t.Bitrate); err != nil {
+		t.ContentKey = contentKey(t.Artist, t.Title, t.Album, t.TrackNo)
+		if _, err := stmt.ExecContext(ctx, t.path, t.Title, t.Artist, t.Album, t.TrackNo, t.DurationMS, t.Size, t.ModTime.Unix(), t.ContentKey, t.Lossless, t.Bitrate, trackPropertiesVersion); err != nil {
 			return err
 		}
 	}
@@ -651,10 +709,6 @@ func (l *Library) Get(ctx context.Context, id int64) (Track, error) {
 	return l.get(ctx, id, true)
 }
 
-func (l *Library) GetCached(ctx context.Context, id int64) (Track, error) {
-	return l.get(ctx, id, false)
-}
-
 func (l *Library) get(ctx context.Context, id int64, fillDuration bool) (Track, error) {
 	row := l.db.QueryRowContext(ctx, `
 SELECT `+trackSelectColumns+`
@@ -707,22 +761,7 @@ func (l *Library) EnsureDuration(id int64) <-chan struct{} {
 	return done
 }
 
-func (l *Library) ListByIDs(ctx context.Context, ids []int64) (map[int64]Track, error) {
-	out := make(map[int64]Track, len(ids))
-	for _, id := range ids {
-		t, err := l.get(ctx, id, false)
-		if err != nil {
-			if errors.Is(err, ErrTrackNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		out[id] = t
-	}
-	return out, nil
-}
-
-func (l *Library) ListByDedupeKeys(ctx context.Context, keys []string) (map[string]Track, error) {
+func (l *Library) ListByContentKeys(ctx context.Context, keys []string) (map[string]Track, error) {
 	out := make(map[string]Track, len(keys))
 	unique := make([]string, 0, len(keys))
 	seen := make(map[string]struct{}, len(keys))
@@ -745,7 +784,7 @@ func (l *Library) ListByDedupeKeys(ctx context.Context, keys []string) (map[stri
 		placeholders[i] = "?"
 		args[i] = key
 	}
-	rows, err := l.db.QueryContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE available = 1 AND dedupe_key IN (`+strings.Join(placeholders, ",")+`) ORDER BY dedupe_key ASC, path ASC`, args...)
+	rows, err := l.db.QueryContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE available = 1 AND content_key IN (`+strings.Join(placeholders, ",")+`) ORDER BY content_key ASC, lossless DESC, bitrate_bps DESC, path ASC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -755,8 +794,8 @@ func (l *Library) ListByDedupeKeys(ctx context.Context, keys []string) (map[stri
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := out[track.DedupeKey]; !exists {
-			out[track.DedupeKey] = track
+		if _, exists := out[track.ContentKey]; !exists {
+			out[track.ContentKey] = track
 		}
 	}
 	return out, rows.Err()
@@ -867,7 +906,7 @@ func (l *Library) GetPlaylistMetadata(ctx context.Context, id int64) (Playlist, 
 }
 
 func (l *Library) PlaylistItems(ctx context.Context, playlistID int64) ([]PlaylistItem, error) {
-	rows, err := l.db.QueryContext(ctx, `SELECT id, playlist_id, position, dedupe_key, match_key, title, artist, album FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC, id ASC`, playlistID)
+	rows, err := l.db.QueryContext(ctx, `SELECT id, playlist_id, position, content_key, title, artist, album FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC, id ASC`, playlistID)
 	if err != nil {
 		return nil, err
 	}
@@ -883,8 +922,8 @@ func (l *Library) PlaylistItems(ctx context.Context, playlistID int64) ([]Playli
 	return items, rows.Err()
 }
 
-func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID int64, dedupeKey string) (PlaylistItem, error) {
-	track, err := l.ResolveDedupeKey(ctx, dedupeKey)
+func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID int64, contentKey string) (PlaylistItem, error) {
+	track, err := l.ResolveContentKey(ctx, contentKey)
 	if err != nil {
 		return PlaylistItem{}, err
 	}
@@ -892,8 +931,8 @@ func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID int64, dedupe
 	if err := l.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) + 1 FROM playlist_items WHERE playlist_id = ?`, playlistID).Scan(&position); err != nil {
 		return PlaylistItem{}, err
 	}
-	res, err := l.db.ExecContext(ctx, `INSERT INTO playlist_items(playlist_id, position, dedupe_key, match_key, title, artist, album) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		playlistID, position, track.DedupeKey, track.MatchKey, track.Title, track.Artist, track.Album)
+	res, err := l.db.ExecContext(ctx, `INSERT INTO playlist_items(playlist_id, position, dedupe_key, match_key, content_key, title, artist, album) VALUES(?, ?, '', '', ?, ?, ?, ?)`,
+		playlistID, position, track.ContentKey, track.Title, track.Artist, track.Album)
 	if err != nil {
 		return PlaylistItem{}, err
 	}
@@ -901,7 +940,7 @@ func (l *Library) AddPlaylistTrack(ctx context.Context, playlistID int64, dedupe
 	if err != nil {
 		return PlaylistItem{}, err
 	}
-	return PlaylistItem{ID: id, PlaylistID: playlistID, Position: position, DedupeKey: track.DedupeKey, MatchKey: track.MatchKey, Title: track.Title, Artist: track.Artist, Album: track.Album}, nil
+	return PlaylistItem{ID: id, PlaylistID: playlistID, Position: position, ContentKey: track.ContentKey, Title: track.Title, Artist: track.Artist, Album: track.Album}, nil
 }
 
 func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, files []FolderManifestFile) (PlaylistFolderImport, error) {
@@ -910,14 +949,13 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 		return result, errors.New("folder contains no supported audio files")
 	}
 	type indexedFile struct {
-		path      string
-		size      int64
-		modTime   int64
-		dedupeKey string
-		matchKey  string
-		title     string
-		artist    string
-		album     string
+		path       string
+		size       int64
+		modTime    int64
+		contentKey string
+		title      string
+		artist     string
+		album      string
 	}
 	bySize := make(map[int64][]indexedFile)
 	sizes := make([]int64, 0, len(files))
@@ -940,13 +978,13 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 			placeholders[i] = "?"
 			args[i] = size
 		}
-		rows, err := l.db.QueryContext(ctx, `SELECT path, size, mod_time, dedupe_key, match_key, title, artist, album FROM tracks WHERE available = 1 AND size IN (`+strings.Join(placeholders, ",")+`)`, args...)
+		rows, err := l.db.QueryContext(ctx, `SELECT path, size, mod_time, content_key, title, artist, album FROM tracks WHERE available = 1 AND size IN (`+strings.Join(placeholders, ",")+`)`, args...)
 		if err != nil {
 			return result, err
 		}
 		for rows.Next() {
 			var file indexedFile
-			if err := rows.Scan(&file.path, &file.size, &file.modTime, &file.dedupeKey, &file.matchKey, &file.title, &file.artist, &file.album); err != nil {
+			if err := rows.Scan(&file.path, &file.size, &file.modTime, &file.contentKey, &file.title, &file.artist, &file.album); err != nil {
 				rows.Close()
 				return result, err
 			}
@@ -977,9 +1015,9 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 			if !pathHasSuffix(candidate.path, relative) {
 				continue
 			}
-			logical[candidate.dedupeKey] = candidate
+			logical[candidate.contentKey] = candidate
 			if manifest.LastModifiedMS > 0 && candidate.modTime == manifest.LastModifiedMS/1000 {
-				exactTime[candidate.dedupeKey] = candidate
+				exactTime[candidate.contentKey] = candidate
 			}
 		}
 		if len(logical) == 1 {
@@ -1013,7 +1051,7 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 		return result, err
 	}
 	existing := make(map[string]struct{})
-	existingRows, err := tx.QueryContext(ctx, `SELECT dedupe_key FROM playlist_items WHERE playlist_id = ?`, playlistID)
+	existingRows, err := tx.QueryContext(ctx, `SELECT content_key FROM playlist_items WHERE playlist_id = ?`, playlistID)
 	if err != nil {
 		return result, err
 	}
@@ -1036,21 +1074,21 @@ func (l *Library) ImportPlaylistFolder(ctx context.Context, playlistID int64, fi
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), 0) FROM playlist_items WHERE playlist_id = ?`, playlistID).Scan(&position); err != nil {
 		return result, err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO playlist_items(playlist_id, position, dedupe_key, match_key, title, artist, album) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO playlist_items(playlist_id, position, dedupe_key, match_key, content_key, title, artist, album) VALUES(?, ?, '', '', ?, ?, ?, ?)`)
 	if err != nil {
 		return result, err
 	}
 	defer stmt.Close()
 	for _, file := range matched {
-		if _, ok := existing[file.dedupeKey]; ok {
+		if _, ok := existing[file.contentKey]; ok {
 			result.Duplicates++
 			continue
 		}
 		position++
-		if _, err := stmt.ExecContext(ctx, playlistID, position, file.dedupeKey, file.matchKey, file.title, file.artist, file.album); err != nil {
+		if _, err := stmt.ExecContext(ctx, playlistID, position, file.contentKey, file.title, file.artist, file.album); err != nil {
 			return result, err
 		}
-		existing[file.dedupeKey] = struct{}{}
+		existing[file.contentKey] = struct{}{}
 		result.Imported++
 	}
 	if result.Imported > 0 {
@@ -1107,27 +1145,8 @@ func (l *Library) DeletePlaylist(ctx context.Context, playlistID int64) error {
 	return tx.Commit()
 }
 
-func (l *Library) ResolvePlaylistTracks(ctx context.Context, playlistID int64) ([]Track, error) {
-	items, err := l.PlaylistItems(ctx, playlistID)
-	if err != nil {
-		return nil, err
-	}
-	tracks := make([]Track, 0, len(items))
-	for _, item := range items {
-		track, err := l.ResolveDedupeKey(ctx, item.DedupeKey)
-		if err != nil {
-			if errors.Is(err, ErrTrackNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		tracks = append(tracks, track)
-	}
-	return tracks, nil
-}
-
-func (l *Library) ResolveDedupeKey(ctx context.Context, key string) (Track, error) {
-	row := l.db.QueryRowContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE available = 1 AND dedupe_key = ? ORDER BY path ASC LIMIT 1`, key)
+func (l *Library) ResolveContentKey(ctx context.Context, key string) (Track, error) {
+	row := l.db.QueryRowContext(ctx, `SELECT `+trackSelectColumns+` FROM tracks WHERE available = 1 AND content_key = ? ORDER BY lossless DESC, bitrate_bps DESC, path ASC LIMIT 1`, key)
 	track, err := scanTrack(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Track{}, ErrTrackNotFound
@@ -1135,57 +1154,43 @@ func (l *Library) ResolveDedupeKey(ctx context.Context, key string) (Track, erro
 	return track, err
 }
 
-func (l *Library) ShuffleTrackIDs(ctx context.Context) ([]int64, error) {
-	rows, err := l.db.QueryContext(ctx, `SELECT MIN(id) FROM tracks WHERE available = 1 GROUP BY dedupe_key`)
+func (l *Library) ShuffleContentKeys(ctx context.Context) ([]string, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT content_key FROM tracks WHERE available = 1 GROUP BY content_key`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []int64
+	var keys []string
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var key string
+		if err := rows.Scan(&key); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		keys = append(keys, key)
 	}
-	return ids, rows.Err()
+	return keys, rows.Err()
 }
 
-func (l *Library) PlaylistShuffleItemIDs(ctx context.Context, playlistID int64) ([]int64, error) {
+func (l *Library) PlaylistShuffleContentKeys(ctx context.Context, playlistID int64) ([]string, error) {
 	rows, err := l.db.QueryContext(ctx, `
-SELECT MIN(pi.id)
+SELECT pi.content_key
 FROM playlist_items pi
 WHERE pi.playlist_id = ?
-  AND EXISTS (SELECT 1 FROM tracks t WHERE t.dedupe_key = pi.dedupe_key AND t.available = 1)
-GROUP BY pi.dedupe_key`, playlistID)
+  AND EXISTS (SELECT 1 FROM tracks t WHERE t.content_key = pi.content_key AND t.available = 1)
+GROUP BY pi.content_key`, playlistID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []int64
+	var keys []string
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var key string
+		if err := rows.Scan(&key); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		keys = append(keys, key)
 	}
-	return ids, rows.Err()
-}
-
-func (l *Library) PlaylistItemTrack(ctx context.Context, playlistID, itemID int64) (Track, error) {
-	row := l.db.QueryRowContext(ctx, `SELECT `+qualifiedTrackSelectColumns+`
-FROM playlist_items pi
-JOIN tracks t ON t.dedupe_key = pi.dedupe_key AND t.available = 1
-WHERE pi.playlist_id = ? AND pi.id = ?
-ORDER BY t.path
-LIMIT 1`, playlistID, itemID)
-	track, err := scanTrack(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Track{}, ErrTrackNotFound
-	}
-	return track, err
+	return keys, rows.Err()
 }
 
 func scanPlaylist(row rowScanner) (Playlist, error) {
@@ -1201,7 +1206,7 @@ func scanPlaylist(row rowScanner) (Playlist, error) {
 
 func scanPlaylistItem(row rowScanner) (PlaylistItem, error) {
 	var item PlaylistItem
-	if err := row.Scan(&item.ID, &item.PlaylistID, &item.Position, &item.DedupeKey, &item.MatchKey, &item.Title, &item.Artist, &item.Album); err != nil {
+	if err := row.Scan(&item.ID, &item.PlaylistID, &item.Position, &item.ContentKey, &item.Title, &item.Artist, &item.Album); err != nil {
 		return PlaylistItem{}, err
 	}
 	return item, nil
@@ -1216,14 +1221,13 @@ func scanTrack(row rowScanner) (Track, error) {
 	var unix int64
 	var available int
 	var lossless int
-	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &t.DedupeKey, &t.MatchKey, &t.ContentKey, &lossless, &t.Bitrate, &available); err != nil {
+	if err := row.Scan(&t.ID, &t.path, &t.Title, &t.Artist, &t.Album, &t.TrackNo, &t.DurationMS, &t.Size, &unix, &t.ContentKey, &lossless, &t.Bitrate, &available); err != nil {
 		return Track{}, err
 	}
 	t.ModTime = time.Unix(unix, 0)
 	t.Lossless = lossless == 1
 	t.Available = available == 1
 	normalizeTrackDisplay(&t)
-	setTrackKeys(&t)
 	return t, nil
 }
 
@@ -1464,7 +1468,7 @@ func (l *Library) scanDirs(ctx context.Context, dirs []string, workers int, dele
 			modTime := info.ModTime().Unix()
 			if knownFile, ok := known[path]; ok {
 				delete(known, path)
-				if knownFile.modTime == modTime && knownFile.contentKey != "" && !strings.HasPrefix(knownFile.contentKey, "legacy:") {
+				if knownFile.modTime == modTime && knownFile.propertiesVersion == trackPropertiesVersion {
 					unchanged++
 					logProgress(false)
 					return nil
@@ -1574,24 +1578,15 @@ func normalizeSearch(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func setTrackKeys(t *Track) {
-	if t == nil {
-		return
-	}
-	match := strings.Join([]string{normalizeSearch(t.Artist), normalizeSearch(t.Title)}, "|")
-	if strings.Trim(match, "|") == "" {
-		match = normalizeSearch(fallbackTitle(t.path))
-	}
-	t.MatchKey = match
-	t.DedupeKey = fmt.Sprintf("%s|%d|%d", match, t.Size, t.ModTime.Unix())
+func contentKey(artist, title, album string, trackNo int) string {
 	identity := strings.Join([]string{
-		normalizeSearch(t.Artist),
-		normalizeSearch(t.Title),
-		normalizeSearch(t.Album),
-		strconv.Itoa(t.TrackNo),
+		normalizeSearch(artist),
+		normalizeSearch(title),
+		normalizeSearch(album),
+		strconv.Itoa(trackNo),
 	}, "\x1f")
 	digest := sha256.Sum256([]byte(identity))
-	t.ContentKey = fmt.Sprintf("v1:%x", digest)
+	return fmt.Sprintf("v1:%x", digest)
 }
 
 func losslessCodec(codec string) bool {

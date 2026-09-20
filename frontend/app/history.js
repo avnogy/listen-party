@@ -5,12 +5,12 @@ const historyEl = document.getElementById("history");
 
 function renderHistoryItem(item) {
   const track = item.track;
-  const dedupeKey = item.dedupe_key;
+  const contentKey = item.content_key;
   return trackUi.trackRow(
-    track || { title: "Unavailable track", dedupe_key: dedupeKey },
-    trackUi.standardTrackCommands(dedupeKey),
+    track || { title: "Unavailable track", content_key: contentKey },
+    trackUi.standardTrackCommands(contentKey),
     formatting.playbackRequester(item),
-    dedupeKey,
+    contentKey,
     [],
     true,
   );

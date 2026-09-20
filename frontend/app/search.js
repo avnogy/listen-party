@@ -56,7 +56,7 @@ async function runSearch() {
       ? tracks.map((track) =>
           trackUi.trackRow(
             track,
-            trackUi.standardTrackCommands(track.dedupe_key),
+            trackUi.standardTrackCommands(track.content_key),
           ),
         )
       : [formatting.emptyHint("No matching tracks")]),

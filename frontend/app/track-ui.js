@@ -97,31 +97,31 @@ function trashButton(label, onClick) {
   return button;
 }
 
-function standardTrackCommands(dedupeKey) {
-  if (!dedupeKey) {
+function standardTrackCommands(contentKey) {
+  if (!contentKey) {
     return [];
   }
   return [
-    ["Queue", { action: "queue_add", dedupe_key: dedupeKey }],
-    ["Play", { action: "play_now", dedupe_key: dedupeKey }],
+    ["Queue", { action: "queue_add", content_key: contentKey }],
+    ["Play", { action: "play_now", content_key: contentKey }],
   ];
 }
 
-function trackActionGroup(commandSpecs, dedupeKey, extraButtons = []) {
+function trackActionGroup(commandSpecs, contentKey, extraButtons = []) {
   const actions = document.createElement("div");
   actions.className = "row-actions";
   actions.append(
     ...commandSpecs.map(([text, body]) => commandButton(text, body)),
   );
-  if (dedupeKey) {
-    actions.append(addToPlaylistButton(dedupeKey));
+  if (contentKey) {
+    actions.append(addToPlaylistButton(contentKey));
   }
   actions.append(...extraButtons);
   permissions.updateRowActionLayout(actions);
   return actions;
 }
 
-function addToPlaylistButton(dedupeKey) {
+function addToPlaylistButton(contentKey) {
   const editable = playlists
     .getPlaylists()
     .filter((playlist) => playlist.can_edit);
@@ -153,7 +153,7 @@ function addToPlaylistButton(dedupeKey) {
       button.setAttribute("aria-expanded", "false");
       await apiModule.api(`/api/playlists/${playlist.id}/items`, {
         method: "POST",
-        body: JSON.stringify({ dedupe_key: dedupeKey }),
+        body: JSON.stringify({ content_key: contentKey }),
       });
       await playlists.loadPlaylists(playlist.id);
     });
@@ -174,7 +174,7 @@ function trackRow(
   track,
   commandSpecs,
   requestedBy = "",
-  dedupeKey = track?.dedupe_key || "",
+  contentKey = track?.content_key || "",
   extraButtons = [],
   showDuration = false,
 ) {
@@ -185,7 +185,7 @@ function trackRow(
     ? formatting.trackSubtitleWithDuration(track)
     : formatting.trackSubtitle(track);
   const meta = trackMeta(formatting.trackTitle(track), subtitle, requestedBy);
-  const actionEl = trackActionGroup(commandSpecs, dedupeKey, extraButtons);
+  const actionEl = trackActionGroup(commandSpecs, contentKey, extraButtons);
 
   row.append(meta, actionEl);
   return row;
