@@ -28,6 +28,27 @@ type Server struct {
 	viewCache      map[string]viewTrackCache
 }
 
+func (s *Server) ConfigSnapshot() (config.Config, string) {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.Config, s.ConfigPath
+}
+
+func (s *Server) LockConfigUpdate() func() {
+	s.configUpdateMu.Lock()
+	return s.configUpdateMu.Unlock
+}
+
+func (s *Server) SetConfig(cfg config.Config) {
+	s.configMu.Lock()
+	s.Config = cfg
+	s.configMu.Unlock()
+}
+
+func (s *Server) LibraryStore() *musiclib.Library { return s.Library }
+
+func (s *Server) RoomStore() *rooms.RoomManager { return s.Rooms }
+
 type viewTrackCache struct {
 	revision uint64
 	tracks   map[string]musiclib.Track

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	assets "listen-party"
+	"listen-party/backend/app/configuration"
 	appauth "listen-party/backend/internal/auth"
 )
 
@@ -38,8 +39,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rooms/{room}/api/command", requireUser(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/admin/rescan", requireAdmin(http.HandlerFunc(s.handleRescan)))
 	mux.Handle("POST /api/admin/rescan-dir", requireAdmin(http.HandlerFunc(s.handleRescanDir)))
-	mux.Handle("GET /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfig)))
-	mux.Handle("PUT /api/admin/config", requireAdmin(http.HandlerFunc(s.handleConfigUpdate)))
+	mux.Handle("GET /api/admin/config", requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configuration.Handle(w, r, s)
+	})))
+	mux.Handle("PUT /api/admin/config", requireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configuration.HandleUpdate(w, r, s)
+	})))
 	mux.Handle("GET /media/{id}/artwork", requireUser(http.HandlerFunc(s.handleArtwork)))
 	mux.Handle("GET /media/{id}", requireUser(http.HandlerFunc(s.handleMedia)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })

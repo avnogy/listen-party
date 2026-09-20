@@ -130,17 +130,3 @@ func cloneConfig(cfg config.Config) config.Config {
 	}
 	return cfg
 }
-
-func removedRoomIDs(oldRooms, newRooms []rooms.Room) []string {
-	remaining := make(map[string]struct{}, len(newRooms))
-	for _, room := range newRooms {
-		remaining[room.ID] = struct{}{}
-	}
-	removed := make([]string, 0)
-	for _, room := range oldRooms {
-		if _, ok := remaining[room.ID]; !ok {
-			removed = append(removed, room.ID)
-		}
-	}
-	return removed
-}
