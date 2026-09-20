@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+
+	"listen-party/backend/config"
 )
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -14,7 +16,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
-	var cfg Config
+	var cfg config.Config
 	if !readJSON(w, r, &cfg) {
 		return
 	}
@@ -36,7 +38,7 @@ func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := SaveConfig(path, cfg); err != nil {
+	if err := config.SaveConfig(path, cfg); err != nil {
 		slog.Warn("save config failed", "remote", r.RemoteAddr, "path", path, "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

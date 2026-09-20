@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"listen-party/backend/config"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/rooms"
 )
@@ -17,7 +18,7 @@ type Server struct {
 	AuthRoutes     http.Handler
 	Library        *musiclib.Library
 	Rooms          *rooms.RoomManager
-	Config         Config
+	Config         config.Config
 	ConfigPath     string
 	configMu       sync.RWMutex
 	configUpdateMu sync.Mutex

@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	domainrooms "listen-party/backend/rooms"
 )
@@ -38,33 +37,9 @@ const (
 
 var roomIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
-func DefaultConfigDir() (string, error) {
-	return configpaths.DefaultDir()
-}
-
-func DefaultConfigPath() (string, error) {
-	return configpaths.DefaultPath()
-}
-
-func ResolveConfigPath(path string) (string, error) {
-	return configpaths.ResolvePath(path)
-}
-
-func DefaultDatabasePath() (string, error) {
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return configpaths.DatabasePath(dir), nil
-}
-
-func DefaultMusicDir() (string, error) {
-	return configpaths.MusicDir()
-}
-
 func LoadConfig(path string) (Config, error) {
 	var err error
-	path, err = ResolveConfigPath(path)
+	path, err = ResolvePath(path)
 	if err != nil {
 		return Config{}, err
 	}
@@ -114,7 +89,7 @@ func migrateConfig(cfg *Config) bool {
 }
 
 func SaveConfig(path string, cfg Config) error {
-	path, err := ResolveConfigPath(path)
+	path, err := ResolvePath(path)
 	if err != nil {
 		return err
 	}

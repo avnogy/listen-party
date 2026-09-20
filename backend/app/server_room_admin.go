@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"listen-party/backend/config"
 	"listen-party/backend/rooms"
 )
 
@@ -61,7 +62,7 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "room administration denied", http.StatusForbidden)
 				return
 			}
-			cfg.Rooms[i].Grants = normalizeRoomGrants(req.Grants)
+			cfg.Rooms[i].Grants = config.NormalizeRoomGrants(req.Grants)
 			cfg.Rooms[i].UserOverrides = req.UserOverrides
 			found = true
 			break
@@ -72,7 +73,7 @@ func (s *Server) handleRoomAdminUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Revision++
-	if err := SaveConfig(configPath, cfg); err != nil {
+	if err := config.SaveConfig(configPath, cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -117,7 +118,7 @@ func (s *Server) handleRoomAdminDisconnect(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func cloneConfig(cfg Config) Config {
+func cloneConfig(cfg config.Config) config.Config {
 	cfg.MusicDirs = append([]string(nil), cfg.MusicDirs...)
 	cfg.BannedIPs = append([]string(nil), cfg.BannedIPs...)
 	cfg.Rooms = append([]rooms.Room(nil), cfg.Rooms...)

@@ -1,16 +1,15 @@
-package main
+package config
 
 import (
 	"path/filepath"
 	"strings"
 
-	configpaths "listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	domainrooms "listen-party/backend/rooms"
 )
 
 func NewDefaultConfig() (Config, error) {
-	configDir, err := DefaultConfigDir()
+	configDir, err := DefaultDir()
 	if err != nil {
 		return Config{}, err
 	}
@@ -23,7 +22,7 @@ func NewDefaultConfigForRoot(configDir string) Config {
 		Revision:     1,
 		Addr:         "0.0.0.0:8080",
 		MusicDirs:    []string{filepath.Join(configDir, "music")},
-		DatabasePath: configpaths.DatabasePath(configDir),
+		DatabasePath: DatabasePath(configDir),
 		ScanWorkers:  defaultScanWorkers,
 		BannedIPs:    []string{},
 		Rooms:        []domainrooms.Room{{ID: defaultRoomID, Name: "Public Room", Grants: domainrooms.OpenRoomGrants()}},
@@ -32,7 +31,7 @@ func NewDefaultConfigForRoot(configDir string) Config {
 }
 
 func (c *Config) ApplyDefaults() error {
-	configDir, err := DefaultConfigDir()
+	configDir, err := DefaultDir()
 	if err != nil {
 		return err
 	}
@@ -42,7 +41,7 @@ func (c *Config) ApplyDefaults() error {
 func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 	if configRoot == "" {
 		var err error
-		configRoot, err = DefaultConfigDir()
+		configRoot, err = DefaultDir()
 		if err != nil {
 			return err
 		}
@@ -56,7 +55,7 @@ func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 	if c.Revision <= 0 {
 		c.Revision = 1
 	}
-	c.DatabasePath = configpaths.DatabasePath(configRoot)
+	c.DatabasePath = DatabasePath(configRoot)
 	if c.ScanWorkers == 0 {
 		c.ScanWorkers = defaultScanWorkers
 	}
@@ -76,7 +75,7 @@ func (c *Config) ApplyDefaultsForRoot(configRoot string) error {
 		if c.Rooms[i].Name == "" {
 			c.Rooms[i].Name = c.Rooms[i].ID
 		}
-		c.Rooms[i].Grants = normalizeRoomGrants(c.Rooms[i].Grants)
+		c.Rooms[i].Grants = NormalizeRoomGrants(c.Rooms[i].Grants)
 		c.Rooms[i].AdminGroups = normalizeConfigList(c.Rooms[i].AdminGroups)
 	}
 	c.Auth.PocketBase.DataDir = appauth.DataDir(configRoot)

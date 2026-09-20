@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"listen-party/backend/config"
 	appauth "listen-party/backend/internal/auth"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/rooms"
@@ -31,12 +32,12 @@ func main() {
 	flag.StringVar(&configPath, "config", "", "path to JSON config file")
 	flag.Parse()
 
-	resolvedConfigPath, err := ResolveConfigPath(configPath)
+	resolvedConfigPath, err := config.ResolvePath(configPath)
 	if err != nil {
 		slog.Error("resolve config path", "error", err)
 		os.Exit(1)
 	}
-	cfg, err := LoadConfig(configPath)
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
 		os.Exit(1)

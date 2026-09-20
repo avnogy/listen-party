@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	. "listen-party/backend/config"
 	musiclib "listen-party/backend/internal/library"
 	"listen-party/backend/playback"
 	. "listen-party/backend/rooms"
@@ -966,7 +967,7 @@ func testServer(s *Server) *Server {
 	if s.Rooms == nil {
 		rooms := s.Config.Rooms
 		if len(rooms) == 0 {
-			rooms = []Room{{ID: defaultRoomID, Name: "Main Room"}}
+			rooms = []Room{{ID: "main", Name: "Main Room"}}
 		}
 		s.Rooms = NewRoomManager(rooms)
 	}

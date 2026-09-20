@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	domainrooms "listen-party/backend/rooms"
 )
 
-func normalizeRoomGrants(grants map[string][]domainrooms.RoomPermission) map[string][]domainrooms.RoomPermission {
+func NormalizeRoomGrants(grants map[string][]domainrooms.RoomPermission) map[string][]domainrooms.RoomPermission {
 	if len(grants) == 0 {
 		return nil
 	}
