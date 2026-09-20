@@ -49,6 +49,12 @@ func (s *Server) LibraryStore() *musiclib.Library { return s.Library }
 
 func (s *Server) RoomStore() *rooms.RoomManager { return s.Rooms }
 
+func (s *Server) AuthStore() auth.Gate { return s.Auth }
+
+func (s *Server) RoomFromRequest(w http.ResponseWriter, r *http.Request) (*rooms.Room, appauth.UserInfo, bool) {
+	return s.roomFromRequest(w, r)
+}
+
 type viewTrackCache struct {
 	revision uint64
 	tracks   map[string]musiclib.Track
