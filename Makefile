@@ -15,8 +15,8 @@ run: compile
 compile:
 	@clear 2>/dev/null || true
 	date
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/lp ./backend
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/lp.exe ./backend
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/lp ./backend/app
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/lp.exe ./backend/app
 
 package: compile
 	test -d "$(CONFIG_DIR)" || (echo "config dir not found: $(CONFIG_DIR)" >&2; exit 1)
