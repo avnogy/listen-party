@@ -202,16 +202,6 @@
             </div>
             <div class="playlist-control-row">
               <select id="playlistSelect" aria-label="Playlist"></select>
-              <button
-                id="deletePlaylist"
-                class="secondary compact icon-only trash-button"
-                type="button"
-                title="Delete playlist"
-                aria-label="Delete playlist"
-                hidden
-              >
-                <span></span>
-              </button>
               <div id="playlistActionsMenu" class="playlist-actions-menu" hidden>
                 <button
                   id="playlistActionsButton"
@@ -228,6 +218,7 @@
                   <button id="importPlaylistFolder" class="playlist-action-option" type="button" role="menuitem">Import from folder...</button>
                   <button id="importPlaylistFile" class="playlist-action-option" type="button" role="menuitem">Import playlist file...</button>
                   <button id="exportPlaylist" class="playlist-action-option" type="button" role="menuitem">Export playlist</button>
+                  <button id="deletePlaylist" class="playlist-action-option danger" type="button" role="menuitem" hidden>Delete playlist</button>
                 </div>
               </div>
             </div>
